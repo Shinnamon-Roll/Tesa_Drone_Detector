@@ -1,0 +1,41 @@
+.layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.layout-header {
+  background: #222;
+  border-bottom: 1px solid #333;
+}
+
+.layout-nav {
+  display: flex;
+  gap: 24px;
+  padding: 12px 24px;
+  align-items: center;
+}
+
+.layout-link {
+  color: #bbb;
+  text-decoration: none;
+  padding-bottom: 4px;
+  border-bottom: 2px solid transparent;
+}
+
+.layout-link.active {
+  color: #ff7f00;
+  border-bottom-color: #ff7f00;
+  font-weight: 600;
+}
+
+.layout-right {
+  margin-left: auto;
+}
+
+.layout-content {
+  flex: 1;
+  padding: 16px 24px;
+}
+
+

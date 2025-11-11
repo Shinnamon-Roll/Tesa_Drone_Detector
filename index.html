@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Defensive Dashboard</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Kanit&display=swap');
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Kanit', sans-serif;
+        }
+        body {
+            background: #121212;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 40px;
+            border-bottom: 1px solid #333;
+            background: #222;
+        }
+        .menu-left, .menu-center {
+            display: flex;
+            gap: 30px;
+            font-weight: 500;
+            font-size: 16px;
+            color: #bbb;
+        }
+        .menu-left a, .menu-center a {
+            text-decoration: none;
+            color: #bbb;
+            padding-bottom: 4px;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            transition: border-color 0.3s, color 0.3s;
+        }
+        .menu-left a:hover, .menu-center a:hover {
+            color: #ff7f00;
+        }
+        .menu-center .active {
+            border-bottom: 2px solid #ff7f00;
+            color: #ff7f00;
+            font-weight: 600;
+        }
+        .user-info {
+            font-size: 14px;
+            color: #ccc;
+            user-select: none;
+        }
+        /* Main layout */
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 3fr 2fr 1.2fr;
+            grid-template-rows: auto 1fr auto;
+            gap: 18px 24px;
+            padding: 24px 40px 40px;
+            background-image: linear-gradient(45deg, #222 25%, transparent 25%),linear-gradient(-45deg, #222 25%, transparent 25%),linear-gradient(45deg, transparent 75%, #222 75%),linear-gradient(-45deg, transparent 75%, #222 75%);
+            background-size: 60px 60px;
+            background-position: 0 0, 0 30px, 30px -30px, -30px 0px;
+        }
+        /* Section Titles */
+        section h2 {
+            color: #eee;
+            font-weight: 600;
+            margin-bottom: 12px;
+            user-select: none;
+        }
+        /* Boxes with purple border */
+        .box {
+            border: 3px solid #a063ff;
+            border-radius: 6px;
+            padding: 6px;
+            background: rgba(255 255 255 / 0.05);
+        }
+        /* Realtime Map */
+        #realtime-map {
+            grid-column: 1 / 2;
+            grid-row: 1 / 3;
+            display: flex;
+            flex-direction: column;
+        }
+        #map-container {
+            flex: 1;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #f9f7f0;
+            position: relative;
+        }
+        /* Using an iframe to embed OpenStreetMap */
+        #map-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        /* Realtime Camera */
+        #realtime-camera {
+            grid-column: 2 / 3;
+            grid-row: 1 / 2;
+            display: flex;
+            flex-direction: column;
+        }
+        #camera-frame {
+            background: #222;
+            border-radius: 6px;
+            border: 3px solid #a063ff;
+            overflow: hidden;
+            position: relative;
+        }
+        #camera-frame img {
+            width: 100%;
+            display: block;
+            object-fit: cover;
+        }
+        /* green bounding box overlay */
+        #camera-frame .bounding-box {
+            position: absolute;
+            border: 3px solid #33ff33;
+            top: 20%;
+            left: 40%;
+            width: 18%;
+            height: 15%;
+            pointer-events: none;
+            box-sizing: border-box;
+        }
+        #camera-label {
+            margin-top: 6px;
+            font-size: 13px;
+            color: #bbb;
+            user-select: none;
+            text-align: center;
+        }
+        /* Last Detected Drone */
+        #last-detected-drone {
+            grid-column: 2 / 3;
+            grid-row: 2 / 3;
+            display: flex;
+            flex-direction: column;
+        }
+        #last-drone-frame {
+            background: #222;
+            border-radius: 6px;
+            border: 3px solid #a063ff;
+            overflow: hidden;
+            position: relative;
+            margin-bottom: 4px;
+        }
+        #last-drone-frame img {
+            width: 100%;
+            display: block;
+            object-fit: cover;
+        }
+        #last-drone-frame .bounding-box {
+            position: absolute;
+            border: 3px solid #33ff33;
+            top: 25%;
+            left: 43%;
+            width: 15%;
+            height: 12%;
+            pointer-events: none;
+            box-sizing: border-box;
+        }
+        #last-drone-label {
+            font-size: 14px;
+            text-align: center;
+            margin-top: 6px;
+            color: #ddd;
+            user-select: none;
+        }
+        /* Drone list on the right side */
+        #drone-list {
+            grid-column: 3 / 4;
+            grid-row: 1 / 3;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+            max-height: calc(100vh - 140px);
+            user-select: none;
+        }
+        .drone-item {
+            display: flex;
+            background: rgba(255 255 255 / 0.1);
+            border-radius: 8px;
+            box-shadow: 0 0 8px #0008 inset;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            padding: 6px;
+        }
+        .drone-item:hover {
+            background: rgba(255 255 255 / 0.2);
+        }
+        .drone-image {
+            width: 90px;
+            height: 70px;
+            flex-shrink: 0;
+            border: 2px solid #a063ff;
+            border-radius: 6px;
+            margin-right: 10px;
+            background: #111;
+        }
+        .drone-image img {
+            max-width: 100%;
+            max-height: 100%;
+            display: block;
+            border-radius: 4px;
+        }
+        .drone-info {
+            font-size: 13px;
+            color: #ddd;
+            line-height: 1.3em;
+            white-space: pre-line;
+            flex-grow: 1;
+        }
+        /* Scrollbar styling */
+        #drone-list::-webkit-scrollbar {
+            width: 7px;
+        }
+        #drone-list::-webkit-scrollbar-thumb {
+            background: #a063ff88;
+            border-radius: 4px;
+        }
+        #drone-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        /* Responsive */
+        @media screen and (max-width: 1200px) {
+            main {
+                grid-template-columns: 1fr 1fr;
+                grid-template-rows: auto auto auto;
+                padding: 16px 24px;
+            }
+            #realtime-map {
+                grid-column: 1 / 3;
+                grid-row: 1 / 2;
+                height: 400px;
+            }
+            #realtime-camera {
+                grid-column: 1 / 2;
+                grid-row: 2 / 3;
+            }
+            #last-detected-drone {
+                grid-column: 2 / 3;
+                grid-row: 2 / 3;
+            }
+            #drone-list {
+                grid-column: 1 / 3;
+                grid-row: 3 / 4;
+                max-height: 250px;
+                flex-direction: row;
+                overflow-x: auto;
+                overflow-y: hidden;
+                gap: 12px;
+            }
+            .drone-item {
+                flex-shrink: 0;
+                width: 280px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <nav class="menu-left" aria-label="Primary Navigation">
+            <a href="#" aria-current="false">Drone Dashboard</a>
+            <a href="#" class="active" aria-current="page">Defensive Dashboard</a>
+            <a href="#" aria-current="false">Offensive Dashboard</a>
+        </nav>
+        <div class="user-info" aria-label="User Name">Methas Thongchan</div>
+    </header>
+    <main>
+        <section id="realtime-map" aria-label="Realtime Map Section">
+            <h2>Realtime Map</h2>
+            <div id="map-container" class="box" tabindex="0" aria-describedby="map-desc">
+                <iframe 
+                    id="map-iframe" 
+                    src="https://www.openstreetmap.org/export/embed.html?bbox=100.5%2C13.7%2C101%2C14.2&amp;layer=mapnik" 
+                    title="OpenStreetMap" 
+                    aria-describedby="map-desc"
+                    loading="lazy"></iframe>
+                <div id="map-desc" class="visually-hidden">แผนที่ตำแหน่งแบบเรียลไทม์ (Realtim Map) แสดงบริเวณพื้นที่ ตำแหน่งโดรน และกล้อง</div>
+            </div>
+        </section>
+
+        <section id="realtime-camera" aria-label="Realtime Camera Section">
+            <h2>Realtime Camera</h2>
+            <div id="camera-frame" class="box" tabindex="0" aria-describedby="camera-desc">
+                <img src="https://i.imgur.com/Pr4o6o2.jpg" alt="ภาพถ่ายทอดสดกล้องจับโดรน" />
+                <div class="bounding-box" aria-hidden="true"></div>
+            </div>
+            <div id="camera-label" aria-live="polite">Camera : 1 100,2000 - 200,100</div>
+            <div id="camera-desc" class="visually-hidden">ภาพถ่ายทอดสดจากกล้อง พร้อมกรอบแสดงโดรนที่ตรวจจับได้แบบเรียลไทม์</div>
+        </section>
+
+        <section id="last-detected-drone" aria-label="Last Detected Drone Section">
+            <h2>Last Detected Drone</h2>
+            <div id="last-drone-frame" class="box" tabindex="0" aria-describedby="last-drone-desc">
+                <img src="https://i.imgur.com/Pr4o6o2.jpg" alt="ภาพโดรนที่ตรวจจับล่าสุด" />
+                <div class="bounding-box" aria-hidden="true"></div>
+            </div>
+            <div id="last-drone-label" aria-live="polite">ภาพโดรนที่ตรวจจับล่าสุด</div>
+            <div id="last-drone-desc" class="visually-hidden">ภาพโดรนที่ตรวจจับได้ล่าสุดพร้อมกรอบแสดงโดรน</div>
+        </section>
+
+        <section id="drone-list" aria-label="รายการโดรนที่ตรวจจับได้">
+            <article class="drone-item" tabindex="0" role="region" aria-labelledby="title-drone-1">
+                <div class="drone-image">
+                    <img src="https://i.imgur.com/OxF1M2L.png" alt="ภาพโดรน รุ่น D0001" />
+                </div>
+                <div class="drone-info" id="title-drone-1">
+                    <strong>Drone ID :</strong> D0001<br />
+                    <strong>Tracked ID :</strong> D001<br />
+                    <strong>Date :</strong> 2024-06-01<br />
+                    <strong>Time :</strong> 15:20:30<br />
+                    <strong>Latitude / Longitude :</strong> 13.736717 / 100.523186<br />
+                    <strong>Altitude :</strong> 45 m<br />
+                    <strong>Speed :</strong> 6.5 m/s<br />
+                    <strong>Direction :</strong> 120°<br />
+                    <strong>Confidence :</strong> 92%<br />
+                    <strong>Behavior :</strong> Hovering
+                </div>
+            </article>
+
+            <article class="drone-item" tabindex="0" role="region" aria-labelledby="title-drone-2">
+                <div class="drone-image">
+                    <img src="https://i.imgur.com/OxF1M2L.png" alt="ภาพโดรน รุ่น D0001" />
+                </div>
+                <div class="drone-info" id="title-drone-2">
+                    <strong>Drone ID :</strong> D0001<br />
+                    <strong>Tracked ID :</strong> D001<br />
+                    <strong>Date :</strong> 2024-06-01<br />
+                    <strong>Time :</strong> 14:05:12<br />
+                    <strong>Latitude / Longitude :</strong> 13.736000 / 100.522000<br />
+                    <strong>Altitude :</strong> 40 m<br />
+                    <strong>Speed :</strong> 7.2 m/s<br />
+                    <strong>Direction :</strong> 110°<br />
+                    <strong>Confidence :</strong> 89%<br />
+                    <strong>Behavior :</strong> Passing
+                </div>
+            </article>
+
+            <article class="drone-item" tabindex="0" role="region" aria-labelledby="title-drone-3">
+                <div class="drone-image">
+                    <img src="https://i.imgur.com/OxF1M2L.png" alt="ภาพโดรน รุ่น D0001" />
+                </div>
+                <div class="drone-info" id="title-drone-3">
+                    <strong>Drone ID :</strong> D0001<br />
+                    <strong>Tracked ID :</strong> D001<br />
+                    <strong>Date :</strong> 2024-06-01<br />
+                    <strong>Time :</strong> 13:47:50<br />
+                    <strong>Latitude / Longitude :</strong> 13.735500 / 100.521500<br />
+                    <strong>Altitude :</strong> 42 m<br />
+                    <strong>Speed :</strong> 5.8 m/s<br />
+                    <strong>Direction :</strong> 100°<br />
+                    <strong>Confidence :</strong> 87%<br />
+                    <strong>Behavior :</strong> Loitering
+                </div>
+            </article>
+
+            <article class="drone-item" tabindex="0" role="region" aria-labelledby="title-drone-4">
+                <div class="drone-image">
+                    <img src="https://i.imgur.com/OxF1M2L.png" alt="ภาพโดรน รุ่น D0001" />
+                </div>
+                <div class="drone-info" id="title-drone-4">
+                    <strong>Drone ID :</strong> D0001<br />
+                    <strong>Tracked ID :</strong> D001<br />
+                    <strong>Date :</strong> 2024-06-01<br />
+                    <strong>Time :</strong> 12:10:45<br />
+                    <strong>Latitude / Longitude :</strong> 13.735000 / 100.521200<br />
+                    <strong>Altitude :</strong> 44 m<br />
+                    <strong>Speed :</strong> 6.0 m/s<br />
+                    <strong>Direction :</strong> 90°<br />
+                    <strong>Confidence :</strong> 90%<br />
+                    <strong>Behavior :</strong> Hovering
+                </div>
+            </article>
+        </section>
+    </main>
+    <style>
+        .visually-hidden { 
+            position: absolute !important; 
+            width: 1px; 
+            height: 1px; 
+            padding: 0; 
+            margin: -1px; 
+            overflow: hidden; 
+            clip: rect(0,0,0,0); 
+            border: 0; 
+        }
+    </style>
+</body>
+</html>
