@@ -150,6 +150,7 @@ export function DefensiveDashboard() {
               <img src="https://i.imgur.com/Pr4o6o2.jpg" alt="Latest detected drone" />
               <div className="bounding-box" aria-hidden="true"></div>
             </div>
+
             <div id="last-drone-label" aria-live="polite" style={{ fontSize: 14, textAlign: "center", marginTop: 6, color: "#ddd" }}>
               ภาพโดรนที่ตรวจจับล่าสุด
             </div>
