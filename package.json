@@ -6,12 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon --config server/nodemon.json",
-    "client:dev": "vite --config client/vite.config.ts",
-    "build": "npm run build:server && npm run build:client",
-    "build:server": "tsc -p server/tsconfig.json",
-    "build:client": "vite build --config client/vite.config.ts",
-    "preview": "vite preview --config client/vite.config.ts",
-    "start": "node dist/server/index.js"
+    "client:dev": "vite --config client/vite.config.js",
+    "build": "vite build --config client/vite.config.js",
+    "preview": "vite preview --config client/vite.config.js",
+    "start": "node server/src/index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -22,12 +20,9 @@
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
-    "@types/react": "^18.3.11",
-    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.3",
     "concurrently": "^9.0.1",
     "nodemon": "^3.1.7",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.6.3",
     "vite": "^5.4.10"
   },
   "repository": {

@@ -1,10 +1,10 @@
 import React from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { AppLayout } from "./layouts/AppLayout";
-import { MainDashboard } from "./pages/MainDashboard";
-import { DefensiveDashboard } from "./pages/DefensiveDashboard";
-import { OffensiveDashboard } from "./pages/OffensiveDashboard";
-import { SettingsPage } from "./pages/SettingsPage";
+import { AppLayout } from "./layouts/AppLayout.jsx";
+import { MainDashboard } from "./pages/MainDashboard.jsx";
+import { DefensiveDashboard } from "./pages/DefensiveDashboard.jsx";
+import { OffensiveDashboard } from "./pages/OffensiveDashboard.jsx";
+import { SettingsPage } from "./pages/SettingsPage.jsx";
 
 export function App() {
   return (
