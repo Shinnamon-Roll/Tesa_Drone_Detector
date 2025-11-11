@@ -117,6 +117,59 @@ sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d your.domain
 ```
 
+## Operations cheatsheet (Ubuntu production)
+
+### Start services
+```bash
+# ensure backend is running (systemd will usually start it on boot)
+pm2 start tesa-backend
+sudo systemctl start nginx
+```
+
+### Stop services
+```bash
+pm2 stop tesa-backend
+sudo systemctl stop nginx
+```
+
+### Restart services
+```bash
+pm2 restart tesa-backend
+sudo systemctl restart nginx
+```
+
+### View logs
+```bash
+pm2 logs tesa-backend
+sudo journalctl -u nginx -n 100 --no-pager
+```
+
+### Redeploy after pulling new code
+```bash
+cd /opt/Tesa_Drone_Detector
+pm2 stop tesa-backend
+sudo systemctl stop nginx
+
+git pull
+sudo npm install
+sudo npm run build
+sudo rm -rf /var/www/tesa/client/dist
+sudo cp -r client/dist /var/www/tesa/client/
+
+pm2 start tesa-backend
+sudo systemctl start nginx
+```
+
+### Full shutdown (including PM2 autostart)
+```bash
+pm2 stop tesa-backend
+pm2 delete tesa-backend
+sudo systemctl stop pm2-$(whoami)
+sudo systemctl disable pm2-$(whoami)
+sudo systemctl stop nginx
+sudo systemctl disable nginx
+```
+
 ## Troubleshooting
 - White screen on http://localhost:5173:
   - Ensure `npm run client:dev` is running, then refresh.
