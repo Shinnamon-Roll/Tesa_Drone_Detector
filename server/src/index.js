@@ -26,12 +26,65 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "../../../dataForWeb");
 const CSV_DIR = path.join(DATA_DIR, "csv");
 const IMAGE_DIR = path.join(DATA_DIR, "image");
+const DETECTED_DIR = path.join(DATA_DIR, "detected");
 
 app.use(cors());
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "tesa-drone-detector-backend" });
+});
+
+// Endpoint to list all detected images
+app.get("/api/detected/images", async (_req, res) => {
+  try {
+    const files = await fs.readdir(DETECTED_DIR);
+    // Filter only image files
+    const imageFiles = files.filter(file => 
+      /\.(jpg|jpeg|png|gif)$/i.test(file)
+    );
+    // Sort by filename in descending order (newest first: img_0258.jpg > img_0001.jpg)
+    imageFiles.sort((a, b) => {
+      // Extract numbers from filenames (e.g., "img_0258.jpg" -> 258)
+      const numA = parseInt(a.match(/\d+/)?.[0] || "0", 10);
+      const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
+      return numB - numA; // Descending order (newest first)
+    });
+    res.json({ images: imageFiles });
+  } catch (error) {
+    console.error("Error listing detected images:", error);
+    res.status(500).json({ error: "Failed to list images" });
+  }
+});
+
+// Endpoint to serve detected images
+app.get("/api/detected/images/:filename", async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    // Security: prevent directory traversal
+    if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+      return res.status(400).json({ error: "Invalid filename" });
+    }
+    const filePath = path.join(DETECTED_DIR, filename);
+    // Check if file exists
+    try {
+      await fs.access(filePath);
+    } catch {
+      return res.status(404).json({ error: "Image not found" });
+    }
+    // Determine content type
+    const ext = path.extname(filename).toLowerCase();
+    const contentType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
+                       ext === ".png" ? "image/png" :
+                       ext === ".gif" ? "image/gif" : "image/jpeg";
+    res.setHeader("Content-Type", contentType);
+    // Stream the file
+    const imageBuffer = await fs.readFile(filePath);
+    res.send(imageBuffer);
+  } catch (error) {
+    console.error("Error serving detected image:", error);
+    res.status(500).json({ error: "Failed to serve image" });
+  }
 });
 
 // Helper function to read and parse CSV file
