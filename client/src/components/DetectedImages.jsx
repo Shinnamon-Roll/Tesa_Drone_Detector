@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import "./DetectedImages.css";
 
-const API_BASE = "http://localhost:3000";
+// Use relative paths to work with Vite proxy in dev and production
+const API_BASE = "";
 
 export function DetectedImages() {
   const [images, setImages] = useState([]);
@@ -11,25 +12,46 @@ export function DetectedImages() {
 
   useEffect(() => {
     fetchImages();
+    // Also check debug endpoint
+    checkDebugInfo();
   }, []);
+
+  const checkDebugInfo = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/debug/paths`);
+      const data = await response.json();
+      console.log("[DetectedImages] Debug info:", data);
+    } catch (err) {
+      console.warn("[DetectedImages] Could not fetch debug info:", err);
+    }
+  };
 
   const fetchImages = async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(`${API_BASE}/api/detected/images`);
+      const url = `${API_BASE}/api/detected/images`;
+      console.log(`[DetectedImages] Fetching from: ${url}`);
+      
+      const response = await fetch(url);
+      
       if (!response.ok) {
-        throw new Error("Failed to fetch images");
+        const errorData = await response.json().catch(() => ({}));
+        console.error(`[DetectedImages] HTTP ${response.status}:`, errorData);
+        throw new Error(errorData.error || errorData.message || `HTTP ${response.status}: Failed to fetch images`);
       }
+      
       const data = await response.json();
+      console.log(`[DetectedImages] Received ${data.images?.length || 0} images:`, data.images?.slice(0, 5));
       setImages(data.images || []);
+      
       // Set the newest image (first in the list) as selected by default
       if (data.images && data.images.length > 0) {
         setSelectedImage(data.images[0]);
       }
     } catch (err) {
-      console.error("Error fetching images:", err);
-      setError(err.message);
+      console.error("[DetectedImages] Error fetching images:", err);
+      setError(err.message || "Failed to load images. Check console for details.");
     } finally {
       setLoading(false);
     }
@@ -57,6 +79,9 @@ export function DetectedImages() {
       <div className="detected-images-header">
         <h2>Detected Images</h2>
         <div className="image-count">{images.length} images</div>
+        <button onClick={fetchImages} className="refresh-button" title="Refresh images">
+          ↻ Refresh
+        </button>
       </div>
       
       <div className="detected-images-layout">
@@ -77,6 +102,10 @@ export function DetectedImages() {
                     src={`${API_BASE}/api/detected/images/${imageName}`}
                     alt={imageName}
                     loading="lazy"
+                    onError={(e) => {
+                      console.error(`[DetectedImages] Failed to load image: ${imageName}`);
+                      e.target.style.display = "none";
+                    }}
                   />
                   <div className="image-name">{imageName}</div>
                 </div>
@@ -105,6 +134,10 @@ export function DetectedImages() {
                 src={`${API_BASE}/api/detected/images/${selectedImage}`}
                 alt={selectedImage}
                 className="selected-image"
+                onError={(e) => {
+                  console.error(`[DetectedImages] Failed to load selected image: ${selectedImage}`);
+                  e.target.alt = "Failed to load image";
+                }}
               />
             </div>
           )}

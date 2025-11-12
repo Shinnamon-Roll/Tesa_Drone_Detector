@@ -23,10 +23,15 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 // Path to dataForWeb directory (adjust this path as needed)
 // Assuming dataForWeb is at the same level as Tesa_Drone_Detector
+// __dirname is server/src, so ../../.. goes to parent of Tesa_Drone_Detector
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "../../../dataForWeb");
 const CSV_DIR = path.join(DATA_DIR, "csv");
 const IMAGE_DIR = path.join(DATA_DIR, "image");
 const DETECTED_DIR = path.join(DATA_DIR, "detected");
+
+// Log paths on startup for debugging
+console.log(`[server] DATA_DIR: ${DATA_DIR}`);
+console.log(`[server] DETECTED_DIR: ${DETECTED_DIR}`);
 
 app.use(cors());
 app.use(express.json());
@@ -35,14 +40,57 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "tesa-drone-detector-backend" });
 });
 
+// Debug endpoint to check paths
+app.get("/api/debug/paths", async (_req, res) => {
+  try {
+    const detectedExists = await fs.access(DETECTED_DIR).then(() => true).catch(() => false);
+    let fileCount = 0;
+    let imageCount = 0;
+    
+    if (detectedExists) {
+      const files = await fs.readdir(DETECTED_DIR);
+      fileCount = files.length;
+      imageCount = files.filter(file => /\.(jpg|jpeg|png|gif)$/i.test(file)).length;
+    }
+    
+    res.json({
+      dataDir: DATA_DIR,
+      detectedDir: DETECTED_DIR,
+      detectedExists,
+      fileCount,
+      imageCount,
+      __dirname
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Endpoint to list all detected images
 app.get("/api/detected/images", async (_req, res) => {
   try {
+    console.log(`[api] Listing images from: ${DETECTED_DIR}`);
+    // Check if directory exists
+    try {
+      await fs.access(DETECTED_DIR);
+    } catch (accessError) {
+      console.error(`[api] Directory does not exist: ${DETECTED_DIR}`, accessError);
+      return res.status(404).json({ 
+        error: "Detected directory not found",
+        path: DETECTED_DIR,
+        message: accessError.message 
+      });
+    }
+    
     const files = await fs.readdir(DETECTED_DIR);
+    console.log(`[api] Found ${files.length} files in directory`);
+    
     // Filter only image files
     const imageFiles = files.filter(file => 
       /\.(jpg|jpeg|png|gif)$/i.test(file)
     );
+    console.log(`[api] Filtered to ${imageFiles.length} image files`);
+    
     // Sort by filename in descending order (newest first: img_0258.jpg > img_0001.jpg)
     imageFiles.sort((a, b) => {
       // Extract numbers from filenames (e.g., "img_0258.jpg" -> 258)
@@ -50,10 +98,15 @@ app.get("/api/detected/images", async (_req, res) => {
       const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
       return numB - numA; // Descending order (newest first)
     });
-    res.json({ images: imageFiles });
+    
+    res.json({ images: imageFiles, count: imageFiles.length });
   } catch (error) {
-    console.error("Error listing detected images:", error);
-    res.status(500).json({ error: "Failed to list images" });
+    console.error("[api] Error listing detected images:", error);
+    res.status(500).json({ 
+      error: "Failed to list images",
+      message: error.message,
+      path: DETECTED_DIR
+    });
   }
 });
 
@@ -61,29 +114,44 @@ app.get("/api/detected/images", async (_req, res) => {
 app.get("/api/detected/images/:filename", async (req, res) => {
   try {
     const filename = req.params.filename;
+    console.log(`[api] Requesting image: ${filename}`);
+    
     // Security: prevent directory traversal
     if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
       return res.status(400).json({ error: "Invalid filename" });
     }
     const filePath = path.join(DETECTED_DIR, filename);
+    console.log(`[api] Full path: ${filePath}`);
+    
     // Check if file exists
     try {
       await fs.access(filePath);
-    } catch {
-      return res.status(404).json({ error: "Image not found" });
+    } catch (accessError) {
+      console.error(`[api] File not found: ${filePath}`, accessError);
+      return res.status(404).json({ 
+        error: "Image not found",
+        filename: filename,
+        path: filePath
+      });
     }
+    
     // Determine content type
     const ext = path.extname(filename).toLowerCase();
     const contentType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
                        ext === ".png" ? "image/png" :
                        ext === ".gif" ? "image/gif" : "image/jpeg";
     res.setHeader("Content-Type", contentType);
+    
     // Stream the file
     const imageBuffer = await fs.readFile(filePath);
+    console.log(`[api] Served image: ${filename} (${imageBuffer.length} bytes)`);
     res.send(imageBuffer);
   } catch (error) {
-    console.error("Error serving detected image:", error);
-    res.status(500).json({ error: "Failed to serve image" });
+    console.error("[api] Error serving detected image:", error);
+    res.status(500).json({ 
+      error: "Failed to serve image",
+      message: error.message
+    });
   }
 });
 
@@ -282,6 +350,18 @@ async function initialize() {
     console.warn(`[warning] You can set DATA_DIR environment variable to customize the path`);
     // Still start the server, watchers will be set up when directories are created
     setupFileWatchers();
+  }
+  
+  // Log detected directory info
+  try {
+    await fs.access(DETECTED_DIR);
+    const files = await fs.readdir(DETECTED_DIR);
+    const imageFiles = files.filter(file => /\.(jpg|jpeg|png|gif)$/i.test(file));
+    console.log(`[server] Detected directory found: ${DETECTED_DIR}`);
+    console.log(`[server] Found ${imageFiles.length} image files in detected directory`);
+  } catch (error) {
+    console.warn(`[warning] Detected directory not found: ${DETECTED_DIR}`);
+    console.warn(`[warning] Please ensure dataForWeb/detected directory exists`);
   }
 }
 
