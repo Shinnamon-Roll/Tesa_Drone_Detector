@@ -1,6 +1,58 @@
-import React from "react";
+import React, { useEffect, useState, useRef } from "react";
+import { io } from "socket.io-client";
 
 export function DefensiveDashboard() {
+  const [droneData, setDroneData] = useState(null);
+  const [droneList, setDroneList] = useState([]);
+  const [connectionStatus, setConnectionStatus] = useState("disconnected");
+  const socketRef = useRef(null);
+
+  useEffect(() => {
+    // Connect to Socket.IO server
+    const socket = io("http://localhost:3000", {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5
+    });
+
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      console.log("Connected to server");
+      setConnectionStatus("connected");
+    });
+
+    socket.on("disconnect", () => {
+      console.log("Disconnected from server");
+      setConnectionStatus("disconnected");
+    });
+
+    socket.on("connect_error", (error) => {
+      console.error("Connection error:", error);
+      setConnectionStatus("error");
+    });
+
+    // Listen for drone data
+    socket.on("drone-data", (data) => {
+      console.log("Received drone data:", data);
+      setDroneData(data);
+
+      // Update drone list from CSV data
+      if (data.csv && data.csv.data && data.csv.data.length > 0) {
+        setDroneList(data.csv.data);
+      }
+    });
+
+    // Cleanup on unmount
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  // Get the latest drone from the list
+  const latestDrone = droneList.length > 0 ? droneList[droneList.length - 1] : null;
+
   return (
     <div>
       <h1 style={{ marginBottom: 12 }}>Defensive Dashboard</h1>
@@ -59,16 +111,6 @@ export function DefensiveDashboard() {
           width: 100%;
           display: block;
           object-fit: cover;
-        }
-        .def-root .bounding-box {
-          position: absolute;
-          border: 3px solid #33ff33;
-          top: 20%;
-          left: 40%;
-          width: 18%;
-          height: 15%;
-          pointer-events: none;
-          box-sizing: border-box;
         }
         .def-root #drone-list {
           display: flex;
@@ -133,48 +175,70 @@ export function DefensiveDashboard() {
           </section>
 
           <section id="realtime-camera" aria-label="Realtime Camera Section" style={{ gridColumn: "2 / 3", gridRow: "1 / 2" }}>
-            <h2>Realtime Camera</h2>
+            <h2>Realtime Camera {connectionStatus === "connected" && <span style={{ fontSize: 12, color: "#33ff33" }}>● Live</span>}</h2>
             <div id="camera-frame" className="box" tabIndex={0} aria-describedby="camera-desc">
-              <img src="https://i.imgur.com/Pr4o6o2.jpg" alt="Live camera stream" />
-              <div className="bounding-box" aria-hidden="true"></div>
+              {droneData?.image ? (
+                <img src={droneData.image} alt="Live camera stream" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+              ) : (
+                <div style={{ width: "100%", height: "200px", display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>
+                  Waiting for image data...
+                </div>
+              )}
             </div>
             <div id="camera-label" aria-live="polite" style={{ marginTop: 6, fontSize: 13, color: "#bbb", textAlign: "center" }}>
-              Camera : 1 100,2000 - 200,100
+              {droneData?.csvPath ? `File: ${droneData.csvPath}` : "Camera : 1 100,2000 - 200,100"}
             </div>
-            <div id="camera-desc" className="visually-hidden">Live feed with bounding box overlay</div>
+            <div id="camera-desc" className="visually-hidden">Live camera feed</div>
           </section>
 
           <section id="last-detected-drone" aria-label="Last Detected Drone Section" style={{ gridColumn: "2 / 3", gridRow: "2 / 3" }}>
             <h2>Last Detected Drone</h2>
             <div id="last-drone-frame" className="box" tabIndex={0} aria-describedby="last-drone-desc">
-              <img src="https://i.imgur.com/Pr4o6o2.jpg" alt="Latest detected drone" />
-              <div className="bounding-box" aria-hidden="true"></div>
+              {droneData?.image ? (
+                <img src={droneData.image} alt="Latest detected drone" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+              ) : (
+                <div style={{ width: "100%", height: "200px", display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>
+                  Waiting for image data...
+                </div>
+              )}
             </div>
 
             <div id="last-drone-label" aria-live="polite" style={{ fontSize: 14, textAlign: "center", marginTop: 6, color: "#ddd" }}>
-              ภาพโดรนที่ตรวจจับล่าสุด
+              {droneData?.timestamp ? `ภาพโดรนที่ตรวจจับล่าสุด - ${new Date(droneData.timestamp).toLocaleTimeString()}` : "ภาพโดรนที่ตรวจจับล่าสุด"}
             </div>
-            <div id="last-drone-desc" className="visually-hidden">Latest detected drone with bounding box</div>
+            <div id="last-drone-desc" className="visually-hidden">Latest detected drone</div>
           </section>
 
-          <section id="drone-list" aria-label="รายการโดรนที่ตรวจจับได้" style={{ gridColumn: "3 / 4", gridRow: "1 / 3" }}>
-            <article className="drone-item" tabIndex={0} role="region" aria-labelledby="title-drone-1">
-              <div className="drone-image">
-                <img src="https://i.imgur.com/OxF1M2L.png" alt="Drone model D0001" />
-              </div>
-              <div className="drone-info" id="title-drone-1">
-                <strong>Drone ID :</strong> D0001<br />
-                <strong>Tracked ID :</strong> D001<br />
-                <strong>Date :</strong> 2024-06-01<br />
-                <strong>Time :</strong> 15:20:30<br />
-                <strong>Latitude / Longitude :</strong> 13.736717 / 100.523186<br />
-                <strong>Altitude :</strong> 45 m<br />
-                <strong>Speed :</strong> 6.5 m/s<br />
-                <strong>Direction :</strong> 120°<br />
-                <strong>Confidence :</strong> 92%<br />
-                <strong>Behavior :</strong> Hovering
-              </div>
-            </article>
+          <section id="drone-list-section" aria-label="รายการโดรนที่ตรวจจับได้" style={{ gridColumn: "3 / 4", gridRow: "1 / 3" }}>
+            <h2 style={{ marginBottom: 12 }}>Drone List ({droneList.length})</h2>
+            <div id="drone-list">
+              {droneList.length > 0 ? (
+                droneList.map((drone, index) => (
+                  <article key={index} className="drone-item" tabIndex={0} role="region" aria-labelledby={`title-drone-${index}`}>
+                    <div className="drone-image">
+                      {droneData?.image ? (
+                        <img src={droneData.image} alt={`Drone ${index + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      ) : (
+                        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#888", fontSize: 10 }}>
+                          No Image
+                        </div>
+                      )}
+                    </div>
+                    <div className="drone-info" id={`title-drone-${index}`}>
+                      {Object.entries(drone).map(([key, value]) => (
+                        <React.Fragment key={key}>
+                          <strong>{key} :</strong> {value || "N/A"}<br />
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <div style={{ padding: 20, textAlign: "center", color: "#888" }}>
+                  {connectionStatus === "connected" ? "Waiting for drone data..." : "Not connected to server"}
+                </div>
+              )}
+            </div>
           </section>
         </div>
       </div>
