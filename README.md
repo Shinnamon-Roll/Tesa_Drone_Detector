@@ -83,7 +83,7 @@ pm2 start server/src/index.js --name tesa-backend
 pm2 save && pm2 startup
 ```
 
-3) Nginx (serve static frontend + proxy /api to backend):
+3) Nginx (serve static frontend + proxy /api and Socket.IO to backend):
 ```
 server {
     listen 80;
@@ -96,6 +96,7 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # Proxy API requests to backend
     location /api/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -103,6 +104,21 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Proxy Socket.IO requests to backend
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
     }
 }
 ```

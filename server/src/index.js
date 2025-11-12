@@ -40,6 +40,39 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "tesa-drone-detector-backend" });
 });
 
+// Endpoint to get camera positions
+app.get("/api/cameras", async (_req, res) => {
+  try {
+    // Default camera positions (can be configured via environment or config file)
+    // Format: [{ lat: number, lng: number, name: string }]
+    const defaultCameras = [
+      { lat: 13.7563, lng: 100.5018, name: "Camera 1" } // Bangkok area default
+    ];
+    
+    // Try to read from config file if exists
+    const configPath = path.join(DATA_DIR, "cameras.json");
+    try {
+      const configContent = await fs.readFile(configPath, "utf-8");
+      const config = JSON.parse(configContent);
+      if (config.cameras && Array.isArray(config.cameras)) {
+        return res.json({ cameras: config.cameras });
+      }
+    } catch (configError) {
+      // Config file doesn't exist or is invalid, use defaults
+      console.log("[api] Using default camera positions");
+    }
+    
+    // Return default cameras
+    res.json({ cameras: defaultCameras });
+  } catch (error) {
+    console.error("[api] Error getting camera positions:", error);
+    res.status(500).json({ 
+      error: "Failed to get camera positions",
+      message: error.message
+    });
+  }
+});
+
 // Debug endpoint to check paths
 app.get("/api/debug/paths", async (_req, res) => {
   try {
@@ -106,6 +139,137 @@ app.get("/api/detected/images", async (_req, res) => {
       error: "Failed to list images",
       message: error.message,
       path: DETECTED_DIR
+    });
+  }
+});
+
+// Endpoint to get latest detected image
+app.get("/api/detected/images/latest", async (_req, res) => {
+  try {
+    console.log(`[api] Getting latest detected image from: ${DETECTED_DIR}`);
+    // Check if directory exists
+    try {
+      await fs.access(DETECTED_DIR);
+    } catch (accessError) {
+      console.error(`[api] Directory does not exist: ${DETECTED_DIR}`, accessError);
+      return res.status(404).json({ 
+        error: "Detected directory not found",
+        path: DETECTED_DIR,
+        message: accessError.message 
+      });
+    }
+    
+    const files = await fs.readdir(DETECTED_DIR);
+    
+    // Filter only image files
+    const imageFiles = files.filter(file => 
+      /\.(jpg|jpeg|png|gif)$/i.test(file)
+    );
+    
+    if (imageFiles.length === 0) {
+      return res.json({ image: null, filename: null });
+    }
+    
+    // Sort by filename in descending order (newest first)
+    imageFiles.sort((a, b) => {
+      const numA = parseInt(a.match(/\d+/)?.[0] || "0", 10);
+      const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
+      return numB - numA; // Descending order (newest first)
+    });
+    
+    const latestImage = imageFiles[0];
+    res.json({ image: latestImage, filename: latestImage });
+  } catch (error) {
+    console.error("[api] Error getting latest detected image:", error);
+    res.status(500).json({ 
+      error: "Failed to get latest image",
+      message: error.message,
+      path: DETECTED_DIR
+    });
+  }
+});
+
+// Endpoint to get CSV files list
+app.get("/api/csv/files", async (_req, res) => {
+  try {
+    console.log(`[api] Listing CSV files from: ${CSV_DIR}`);
+    try {
+      await fs.access(CSV_DIR);
+    } catch (accessError) {
+      console.error(`[api] CSV directory does not exist: ${CSV_DIR}`, accessError);
+      return res.json({ files: [], count: 0 });
+    }
+    
+    const files = await fs.readdir(CSV_DIR);
+    const csvFiles = files.filter(file => /\.csv$/i.test(file));
+    
+    // Sort by filename in descending order (newest first)
+    csvFiles.sort((a, b) => {
+      const numA = parseInt(a.match(/\d+/)?.[0] || "0", 10);
+      const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
+      return numB - numA;
+    });
+    
+    res.json({ files: csvFiles, count: csvFiles.length });
+  } catch (error) {
+    console.error("[api] Error listing CSV files:", error);
+    res.status(500).json({ 
+      error: "Failed to list CSV files",
+      message: error.message
+    });
+  }
+});
+
+// Endpoint to get CSV data for a specific image (by matching image_name)
+app.get("/api/csv/for-image/:imageFilename", async (req, res) => {
+  try {
+    const imageFilename = req.params.imageFilename;
+    
+    try {
+      await fs.access(CSV_DIR);
+    } catch {
+      return res.json({ data: null, message: "CSV directory not found" });
+    }
+    
+    const files = await fs.readdir(CSV_DIR);
+    const csvFiles = files.filter(file => /\.csv$/i.test(file));
+    
+    // Search through all CSV files to find matching image_name
+    let matchedData = null;
+    let matchedFile = null;
+    
+    for (const csvFile of csvFiles) {
+      const csvPath = path.join(CSV_DIR, csvFile);
+      const csvData = await readCSVFile(csvPath);
+      
+      if (csvData && csvData.data && csvData.data.length > 0) {
+        // Look for row with matching image_name
+        const matchedRow = csvData.data.find(row => {
+          const rowImageName = row.image_name || row.imageName || row["image_name"];
+          return rowImageName === imageFilename || rowImageName === imageFilename.replace(/^.*\//, "");
+        });
+        
+        if (matchedRow) {
+          matchedData = matchedRow;
+          matchedFile = csvFile;
+          break;
+        }
+      }
+    }
+    
+    if (!matchedData) {
+      return res.json({ data: null, message: "No matching CSV data found for this image" });
+    }
+    
+    res.json({ 
+      data: matchedData, 
+      filename: matchedFile 
+    });
+  } catch (error) {
+    console.error("[api] Error getting CSV for image:", error);
+    res.status(500).json({ 
+      error: "Failed to get CSV data",
+      message: error.message
     });
   }
 });
