@@ -41,6 +41,8 @@ export function DefensiveDashboard() {
       // Update drone list from CSV data
       if (data.csv && data.csv.data && data.csv.data.length > 0) {
         setDroneList(data.csv.data);
+      } else {
+        setDroneList([]);
       }
     });
 
@@ -50,8 +52,9 @@ export function DefensiveDashboard() {
     };
   }, []);
 
-  // Get the latest drone from the list
-  const latestDrone = droneList.length > 0 ? droneList[droneList.length - 1] : null;
+  const hasCSVData = Boolean(
+    droneData?.csv && Array.isArray(droneData.csv.data) && droneData.csv.data.length > 0
+  );
 
   return (
     <div>
@@ -185,8 +188,19 @@ export function DefensiveDashboard() {
                 </div>
               )}
             </div>
-            <div id="camera-label" aria-live="polite" style={{ marginTop: 6, fontSize: 13, color: "#bbb", textAlign: "center" }}>
-              {droneData?.csvPath ? `File: ${droneData.csvPath}` : "Camera : 1 100,2000 - 200,100"}
+            <div
+              id="camera-label"
+              aria-live="polite"
+              style={{ marginTop: 6, fontSize: 13, color: "#bbb", textAlign: "center", lineHeight: 1.4 }}
+            >
+              {droneData ? (
+                <>
+                  <div>{droneData.imagePath ? `Image: ${droneData.imagePath}` : "Image file: unknown"}</div>
+                  <div>{hasCSVData ? `Details file: ${droneData.csvPath}` : "Details unavailable"}</div>
+                </>
+              ) : (
+                "Camera : 1 100,2000 - 200,100"
+              )}
             </div>
             <div id="camera-desc" className="visually-hidden">Live camera feed</div>
           </section>
@@ -203,16 +217,27 @@ export function DefensiveDashboard() {
               )}
             </div>
 
-            <div id="last-drone-label" aria-live="polite" style={{ fontSize: 14, textAlign: "center", marginTop: 6, color: "#ddd" }}>
-              {droneData?.timestamp ? `ภาพโดรนที่ตรวจจับล่าสุด - ${new Date(droneData.timestamp).toLocaleTimeString()}` : "ภาพโดรนที่ตรวจจับล่าสุด"}
+            <div
+              id="last-drone-label"
+              aria-live="polite"
+              style={{ fontSize: 14, textAlign: "center", marginTop: 6, color: "#ddd", lineHeight: 1.4 }}
+            >
+              <div>
+                {droneData?.timestamp
+                  ? `ภาพโดรนที่ตรวจจับล่าสุด - ${new Date(droneData.timestamp).toLocaleTimeString()}`
+                  : "ภาพโดรนที่ตรวจจับล่าสุด"}
+              </div>
+              {!hasCSVData && <div style={{ fontSize: 12, color: "#aaa" }}>รายละเอียดไม่พร้อมใช้งาน</div>}
             </div>
             <div id="last-drone-desc" className="visually-hidden">Latest detected drone</div>
           </section>
 
           <section id="drone-list-section" aria-label="รายการโดรนที่ตรวจจับได้" style={{ gridColumn: "3 / 4", gridRow: "1 / 3" }}>
-            <h2 style={{ marginBottom: 12 }}>Drone List ({droneList.length})</h2>
+            <h2 style={{ marginBottom: 12 }}>
+              Drone List {hasCSVData ? `(${droneList.length})` : "(details unavailable)"}
+            </h2>
             <div id="drone-list">
-              {droneList.length > 0 ? (
+              {hasCSVData && droneList.length > 0 ? (
                 droneList.map((drone, index) => (
                   <article key={index} className="drone-item" tabIndex={0} role="region" aria-labelledby={`title-drone-${index}`}>
                     <div className="drone-image">
@@ -234,8 +259,12 @@ export function DefensiveDashboard() {
                   </article>
                 ))
               ) : (
-                <div style={{ padding: 20, textAlign: "center", color: "#888" }}>
-                  {connectionStatus === "connected" ? "Waiting for drone data..." : "Not connected to server"}
+                <div style={{ padding: 20, textAlign: "center", color: "#888", lineHeight: 1.4 }}>
+                  {connectionStatus !== "connected"
+                    ? "Not connected to server"
+                    : droneData?.image
+                      ? "Image received. CSV details not provided."
+                      : "Waiting for drone data..."}
                 </div>
               )}
             </div>
