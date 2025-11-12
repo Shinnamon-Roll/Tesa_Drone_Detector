@@ -146,11 +146,11 @@ sudo journalctl -u nginx -n 100 --no-pager
 
 ### Redeploy after pulling new code
 ```bash
-cd /opt/Tesa_Drone_Detector
+cd Tesa_Drone_Detector
 pm2 stop tesa-backend
 sudo systemctl stop nginx
 
-git pull
+git pull origin main
 sudo npm install
 sudo npm run build
 sudo rm -rf /var/www/tesa/client/dist
