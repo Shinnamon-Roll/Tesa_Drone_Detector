@@ -569,19 +569,32 @@ app.get("/api/offensive/drones", async (_req, res) => {
 });
 
 // Helper function to update drone data from MATLAB format
-// Expected format: { "lat": value, "lng": value, "height": value }
+// Expected format: { "lat": value, "lng": value or "lon": value, "height": value }
+// Note: MATLAB coordinate system may have inverted Y axis (height negative = underground)
 function updateDroneData(data) {
   try {
     const timestamp = new Date().toISOString();
-    const lat = parseFloat(data.lat);
-    const lng = parseFloat(data.lng);
-    const height = parseFloat(data.height) || 0;
+    let lat = parseFloat(data.lat);
+    // Support both "lng" and "lon" (MATLAB might use "lon")
+    let lng = parseFloat(data.lng || data.lon);
+    let height = parseFloat(data.height) || 0;
     
     // Validate data
     if (isNaN(lat) || isNaN(lng)) {
-      console.error("[DRONE] Invalid lat/lng values:", { lat: data.lat, lng: data.lng });
+      console.error("[DRONE] Invalid lat/lng values:", { lat: data.lat, lng: data.lng || data.lon });
       return false;
     }
+    
+    // Fix inverted Y axis: if height is negative, it means the coordinate system is inverted
+    // Invert height to make it positive (above ground)
+    if (height < 0) {
+      height = Math.abs(height);
+      console.log(`[DRONE] Fixed inverted height: ${data.height} -> ${height}`);
+    }
+    
+    // Fix inverted Y axis for latitude if needed (if coordinates are in local coordinate system)
+    // If latitude is negative and seems to be in wrong range, might need to invert
+    // For now, we'll keep lat/lng as is but ensure height is positive
     
     // Check if drone exists
     const existingIndex = teamDronesData.findIndex(d => d.id === DRONE_ID);
@@ -601,7 +614,7 @@ function updateDroneData(data) {
         lastUpdate: timestamp,
         previousLocation: previousLocation
       };
-      console.log(`[DRONE] Updated drone ${DRONE_ID} - Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}, Height: ${height}m`);
+      console.log(`[DRONE] Updated drone ${DRONE_ID} - Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}, Height: ${height.toFixed(2)}m`);
     } else {
       // Add new drone
       teamDronesData.push({
@@ -615,7 +628,7 @@ function updateDroneData(data) {
         heading: 0,
         lastUpdate: timestamp
       });
-      console.log(`[DRONE] Added new drone ${DRONE_ID} - Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}, Height: ${height}m`);
+      console.log(`[DRONE] Added new drone ${DRONE_ID} - Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}, Height: ${height.toFixed(2)}m`);
     }
     
     // Emit to all connected clients via Socket.IO
@@ -683,7 +696,7 @@ function initializeMQTT() {
         } else {
           console.log(`[MQTT] [${timestamp}] ✅ Subscribed to topic: ${MQTT_TOPIC}`);
           console.log(`[MQTT] [${timestamp}] 📡 Waiting for drone data from MATLAB...`);
-          console.log(`[MQTT] [${timestamp}] 📋 Expected format: { "lat": number, "lng": number, "height": number }`);
+          console.log(`[MQTT] [${timestamp}] 📋 Expected format: { "lat": number, "lng": number (or "lon"), "height": number }`);
         }
       });
     });

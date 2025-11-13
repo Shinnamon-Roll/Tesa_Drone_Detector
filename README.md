@@ -69,31 +69,83 @@ package.json            # Scripts and deps (JS only)
 Vite dev server proxies `/api` to `http://localhost:3000` (see `client/vite.config.js`).
 
 ## Production deployment (Ubuntu + Nginx + PM2)
-1) Build frontend:
+
+**Current Production Setup:**
+- **Server IP:** `185.84.160.134`
+- **Project Path:** `/home/xver/Tesa_Project/Tesa_Drone_Detector`
+- **Frontend Deploy Path:** `/var/www/tesa/client/dist`
+- **Nginx Config:** `/etc/nginx/sites-available/tesa`
+- **PM2 Process:** `tesa-backend`
+
+### 1) Build frontend:
 ```bash
+cd /home/xver/Tesa_Project/Tesa_Drone_Detector
 npm install
 npm run build
 ```
 Output: `client/dist`
 
-2) Start backend with PM2:
+### 2) Deploy frontend to nginx directory:
 ```bash
-npm i -g pm2
+sudo rm -rf /var/www/tesa/client/dist
+sudo cp -r client/dist /var/www/tesa/client/
+sudo chown -R www-data:www-data /var/www/tesa/client/dist
+```
+
+### 3) Start backend with PM2:
+```bash
+cd /home/xver/Tesa_Project/Tesa_Drone_Detector
+npm i -g pm2  # if not installed
 pm2 start server/src/index.js --name tesa-backend
 pm2 save && pm2 startup
 ```
 
-3) Nginx (serve static frontend + proxy /api and Socket.IO to backend):
+### 4) Nginx Configuration
+
+**Current nginx config location:** `/etc/nginx/sites-available/tesa`
+
+The server is configured with:
+- **Server IP:** `185.84.160.134` (port 80)
+- **Root:** `/var/www/tesa/client/dist`
+- **Backend Proxy:** `http://127.0.0.1:3000`
+- **Cache Control:** HTML files no-cache, static assets cached 1 year
+
+**To update nginx config:**
+```bash
+sudo nano /etc/nginx/sites-available/tesa
+sudo nginx -t  # Test configuration
+sudo systemctl reload nginx  # Reload nginx
 ```
+
+**Current nginx config structure:**
+```nginx
 server {
     listen 80;
-    server_name YOUR.SERVER.IP.ADDRESS;
+    server_name 185.84.160.134;
 
     root /var/www/tesa/client/dist;
-    index index.html;
+    index index.html index.jsx;
+
+    # Disable cache for HTML files
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Pragma "no-cache";
+        add_header Expires "0";
+        try_files $uri =404;
+    }
+
+    # Cache static assets (JS, CSS) with versioning
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
 
     location / {
         try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Pragma "no-cache";
+        add_header Expires "0";
     }
 
     # Proxy API requests to backend
@@ -122,16 +174,20 @@ server {
     }
 }
 ```
-Reload Nginx:
-```bash
-sudo nginx -t && sudo systemctl reload nginx
-```
 
-Optional (HTTPS):
+### 5) Server Code Updates for Nginx
+
+The server code has been updated to support nginx reverse proxy:
+- ✅ **Trust Proxy:** `app.set('trust proxy', true)` - for correct IP addresses
+- ✅ **CORS:** Configured to work with nginx
+- ✅ **Socket.IO:** Configured with proper transports for nginx proxy
+
+### Optional (HTTPS with Let's Encrypt):
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d your.domain
+sudo certbot --nginx -d your.domain.com
 ```
+See `HTTPS_DOMAIN_SETUP.md` for detailed HTTPS setup instructions.
 
 ## Operations cheatsheet (Ubuntu production)
 
@@ -162,18 +218,21 @@ sudo journalctl -u nginx -n 100 --no-pager
 
 ### Redeploy after pulling new code
 ```bash
-cd Tesa_Drone_Detector
+cd /home/xver/Tesa_Project/Tesa_Drone_Detector
 pm2 stop tesa-backend
-sudo systemctl stop nginx
 
 git pull origin main
-sudo npm install
-sudo npm run build
+npm install
+npm run build
+
+# Deploy frontend
 sudo rm -rf /var/www/tesa/client/dist
 sudo cp -r client/dist /var/www/tesa/client/
+sudo chown -R www-data:www-data /var/www/tesa/client/dist
 
-pm2 start tesa-backend
-sudo systemctl start nginx
+# Restart services
+pm2 restart tesa-backend
+sudo systemctl reload nginx
 ```
 
 ### Full shutdown (including PM2 autostart)

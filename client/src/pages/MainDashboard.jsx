@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   LineChart,
   Line,
@@ -14,6 +15,7 @@ export function MainDashboard() {
   // Debug: Log component mount
   console.log('[MainDashboard] Component mounted - NEW VERSION WITHOUT IMAGES');
   
+  const navigate = useNavigate();
   const [detectedImages, setDetectedImages] = useState([]);
   const [imageCSVData, setImageCSVData] = useState({});
   const [latencyDurationData, setLatencyDurationData] = useState([]);
@@ -427,7 +429,7 @@ export function MainDashboard() {
           </div>
           <div className="stat-card">
             <h3>🚁 Active Units</h3>
-            <div className="stat-value">{teamDrones.length}</div>
+            <div className="stat-value">{Math.min(teamDrones.length, 4)}</div>
           </div>
           <div className="stat-card">
             <h3>👥 Personnel Count</h3>
@@ -594,10 +596,41 @@ export function MainDashboard() {
           {/* Middle Column - Team Drones */}
           <div>
             <div className="section">
-              <h2>🚁 Fleet Status ({teamDrones.length})</h2>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                <h2 style={{ margin: 0 }}>🚁 Fleet Status (4)</h2>
+                <button
+                  onClick={() => navigate("/offensive")}
+                  style={{
+                    padding: "8px 16px",
+                    background: colors.accent,
+                    color: colors.text,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    textTransform: "uppercase",
+                    transition: "all 0.2s",
+                    fontFamily: "'Kanit', sans-serif",
+                    letterSpacing: "0.5px"
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.background = colors.secondary;
+                    e.target.style.transform = "translateY(-2px)";
+                    e.target.style.boxShadow = `0 4px 8px rgba(0,0,0,0.3)`;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.background = colors.accent;
+                    e.target.style.transform = "translateY(0)";
+                    e.target.style.boxShadow = "none";
+                  }}
+                >
+                  → View in Offensive Dashboard
+                </button>
+              </div>
               <div style={{ maxHeight: "420px", overflowY: "auto" }}>
                 {teamDrones.length > 0 ? (
-                  teamDrones.map((drone) => (
+                  teamDrones.slice(0, 4).map((drone) => (
                     <div key={drone.id} className="team-drone-item">
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                         <strong style={{ color: colors.text, fontSize: "13px" }}>{drone.name}</strong>
@@ -628,19 +661,19 @@ export function MainDashboard() {
                 <div className="info-row">
                   <span>✅ Active:</span>
                   <span style={{ color: colors.success, fontWeight: "700" }}>
-                    {teamDrones.filter(d => d.status === 'active').length}
+                    {teamDrones.slice(0, 4).filter(d => d.status === 'active').length}
                   </span>
                 </div>
                 <div className="info-row">
                   <span>⏸️ Standby:</span>
                   <span style={{ color: colors.warning, fontWeight: "700" }}>
-                    {teamDrones.filter(d => d.status === 'standby').length}
+                    {teamDrones.slice(0, 4).filter(d => d.status === 'standby').length}
                   </span>
                 </div>
                 <div className="info-row">
                   <span>🔧 Maintenance:</span>
                   <span style={{ color: colors.danger, fontWeight: "700" }}>
-                    {teamDrones.filter(d => d.status === 'maintenance').length}
+                    {teamDrones.slice(0, 4).filter(d => d.status === 'maintenance').length}
                   </span>
                 </div>
               </div>

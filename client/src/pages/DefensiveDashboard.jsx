@@ -175,9 +175,9 @@ export function DefensiveDashboard() {
     
     const map = new mapboxgl.Map({
       container: mapRef.current,
-      style: "mapbox://styles/mapbox/dark-v11",
-      center: [100.5, 13.7], // Default center (Bangkok area)
-      zoom: 12
+      style: "mapbox://styles/mapbox/satellite-streets-v12", // Satellite/realistic style
+      center: [101.217, 14.317], // Default center (Chulachomklao Royal Military Academy, Nakhon Nayok)
+      zoom: 14 // Zoom to show area around the academy
     });
     
     mapInstanceRef.current = map;
@@ -284,8 +284,24 @@ export function DefensiveDashboard() {
       const lng = csvData?.longitude || csvData?.lng;
       
       if (csvData && lat && lng) {
-        const latNum = parseFloat(lat);
-        const lngNum = parseFloat(lng);
+        let latNum = parseFloat(lat);
+        let lngNum = parseFloat(lng);
+        
+        // Convert local coordinates to GPS if needed (same as OffensiveDashboard)
+        const REFERENCE_LAT = 14.317; // Chulachomklao Royal Military Academy
+        const REFERENCE_LNG = 101.217;
+        
+        if (latNum < -90 || latNum > 90 || lngNum < -180 || lngNum > 180) {
+          console.warn(`[DefensiveDashboard] Converting local coordinates:`, { lat: latNum, lng: lngNum });
+          const OFFSET_SCALE = 0.00001;
+          const MAX_RADIUS_DEGREES = 0.02;
+          const offsetLat = ((latNum % 1000) * OFFSET_SCALE) % MAX_RADIUS_DEGREES;
+          const offsetLng = ((lngNum % 1000) * OFFSET_SCALE) % MAX_RADIUS_DEGREES;
+          latNum = REFERENCE_LAT + offsetLat;
+          lngNum = REFERENCE_LNG + offsetLng;
+          latNum = Math.max(-90, Math.min(90, latNum));
+          lngNum = Math.max(-180, Math.min(180, lngNum));
+        }
         
         if (!isNaN(latNum) && !isNaN(lngNum)) {
           const el = document.createElement("div");
