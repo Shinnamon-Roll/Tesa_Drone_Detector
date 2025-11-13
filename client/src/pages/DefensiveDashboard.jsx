@@ -2,6 +2,16 @@ import React, { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from "recharts";
 
 export function DefensiveDashboard() {
   const [droneData, setDroneData] = useState(null);
@@ -15,6 +25,10 @@ export function DefensiveDashboard() {
   const [selectedCameraPosition, setSelectedCameraPosition] = useState(null); // {lat, lng} for temporary selection
   const [isLockingCamera, setIsLockingCamera] = useState(false);
   const [selectedDrone, setSelectedDrone] = useState(null); // Selected drone data for card display
+  const [latencyDurationData, setLatencyDurationData] = useState([]);
+  const [attackDefenseTimes, setAttackDefenseTimes] = useState({ timeToAttack: 0, timeToDefense: 0 });
+  const [weather, setWeather] = useState(null);
+  const [peopleCount, setPeopleCount] = useState(0);
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersRef = useRef({ cameras: [], drones: [] });
@@ -351,12 +365,84 @@ export function DefensiveDashboard() {
     }
   }, [cameraPositions, imageCSVData, selectedCameraPosition]);
   
+  // Fetch latency and duration data
+  const fetchLatencyDuration = async () => {
+    try {
+      const response = await fetch("/api/metrics/latency-duration");
+      if (response.ok) {
+        const data = await response.json();
+        // Format data for chart (convert time to readable format)
+        const formattedData = data.data.map(item => ({
+          time: new Date(item.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          latency: Math.round(item.latency),
+          duration: Math.round(item.duration)
+        }));
+        setLatencyDurationData(formattedData);
+      }
+    } catch (error) {
+      console.error("[DefensiveDashboard] Error fetching latency/duration:", error);
+    }
+  };
+
+  // Fetch attack and defense times
+  const fetchAttackDefense = async () => {
+    try {
+      const response = await fetch("/api/metrics/attack-defense");
+      if (response.ok) {
+        const data = await response.json();
+        setAttackDefenseTimes({
+          timeToAttack: Math.round(data.timeToAttack),
+          timeToDefense: Math.round(data.timeToDefense)
+        });
+      }
+    } catch (error) {
+      console.error("[DefensiveDashboard] Error fetching attack/defense times:", error);
+    }
+  };
+
+  // Fetch weather
+  const fetchWeather = async () => {
+    try {
+      const response = await fetch("/api/weather");
+      if (response.ok) {
+        const data = await response.json();
+        setWeather(data);
+      }
+    } catch (error) {
+      console.error("[DefensiveDashboard] Error fetching weather:", error);
+    }
+  };
+
+  // Fetch people count
+  const fetchPeopleCount = async () => {
+    try {
+      const response = await fetch("/api/area/people-count");
+      if (response.ok) {
+        const data = await response.json();
+        setPeopleCount(data.count || 0);
+      }
+    } catch (error) {
+      console.error("[DefensiveDashboard] Error fetching people count:", error);
+    }
+  };
+
   // Fetch detected images on mount and periodically
   useEffect(() => {
     fetchDetectedImages();
     fetchCameraPositions();
+    fetchLatencyDuration();
+    fetchAttackDefense();
+    fetchWeather();
+    fetchPeopleCount();
+    
     // Refresh detected images every 5 seconds
-    const interval = setInterval(fetchDetectedImages, 5000);
+    const interval = setInterval(() => {
+      fetchDetectedImages();
+      fetchLatencyDuration();
+      fetchAttackDefense();
+      fetchWeather();
+      fetchPeopleCount();
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -364,45 +450,158 @@ export function DefensiveDashboard() {
     droneData?.csv && Array.isArray(droneData.csv.data) && droneData.csv.data.length > 0
   );
 
+  // Military color theme (same as MainDashboard)
+  const colors = {
+    primary: "#4A5D23",      // Olive drab dark
+    secondary: "#6B8E23",    // Olive drab
+    accent: "#8B9A46",       // Military green
+    warning: "#DAA520",      // Goldenrod
+    danger: "#8B0000",       // Dark red
+    success: "#2F4F2F",      // Dark green
+    bgDark: "#1C1F1A",       // Very dark green-black
+    bgMedium: "#2D3028",     // Dark green-gray
+    bgLight: "#3A3D35",      // Medium green-gray
+    text: "#E8E8D3",         // Light beige
+    textSecondary: "#B8B8A3", // Medium beige
+    border: "#556B2F"        // Forest green
+  };
+
   return (
-    <div>
-      <h1 style={{ marginBottom: 12 }}>Defensive Dashboard</h1>
+    <div style={{ 
+      background: colors.bgDark, 
+      minHeight: "100vh", 
+      padding: "20px",
+      position: "relative",
+      zIndex: 1
+    }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Kanit&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&family=Orbitron:wght@400;500;600;700&display=swap');
+        .def-root {
+          width: 100% !important;
+          font-family: 'Kanit', sans-serif !important;
+          background: ${colors.bgDark} !important;
+        }
         .def-root * {
           box-sizing: border-box;
-          margin: 0;
-          padding: 0;
-          font-family: 'Kanit', sans-serif;
+        }
+        .def-root h1 {
+          font-family: 'Orbitron', sans-serif;
+          font-weight: 700;
+          font-size: 28px;
+          color: ${colors.text};
+          margin-bottom: 24px;
+          text-transform: uppercase;
+          letter-spacing: 2px;
+          text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+          border-bottom: 3px solid ${colors.primary};
+          padding-bottom: 12px;
         }
         .def-root .box {
-          border: 3px solid #a063ff;
-          border-radius: 6px;
-          padding: 6px;
-          background: rgba(255 255 255 / 0.05);
+          border: 2px solid ${colors.border};
+          border-radius: 4px;
+          padding: 8px;
+          background: ${colors.bgMedium};
         }
         .def-root .grid {
           display: grid;
-          grid-template-columns: 3fr 2fr 1.2fr;
-          grid-template-rows: auto 1fr auto;
-          gap: 18px 24px;
-          background-image: linear-gradient(45deg, #222 25%, transparent 25%),linear-gradient(-45deg, #222 25%, transparent 25%),linear-gradient(45deg, transparent 75%, #222 75%),linear-gradient(-45deg, transparent 75%, #222 75%);
-          background-size: 60px 60px;
-          background-position: 0 0, 0 30px, 30px -30px, -30px 0px;
-          padding: 4px;
+          grid-template-columns: 2fr 1.5fr 1fr;
+          grid-template-rows: auto auto auto;
+          gap: 20px;
+        }
+        .def-root .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+          margin-bottom: 24px;
+        }
+        .def-root .stat-card {
+          background: linear-gradient(135deg, ${colors.bgMedium} 0%, ${colors.bgLight} 100%);
+          border: 2px solid ${colors.border};
+          border-radius: 4px;
+          padding: 16px;
+          text-align: center;
+          box-shadow: 0 4px 8px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .def-root .stat-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 12px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+        .def-root .stat-card h3 {
+          font-size: 12px;
+          color: ${colors.textSecondary};
+          margin-bottom: 10px;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          font-weight: 600;
+        }
+        .def-root .stat-card .stat-value {
+          font-size: 32px;
+          font-weight: 700;
+          color: ${colors.accent};
+          font-family: 'Orbitron', sans-serif;
+          text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        .def-root .chart-container {
+          background: ${colors.bgDark};
+          border: 1px solid ${colors.border};
+          border-radius: 4px;
+          padding: 16px;
+          min-height: 280px;
+        }
+        .def-root .info-card {
+          background: ${colors.bgDark};
+          border: 1px solid ${colors.border};
+          border-radius: 4px;
+          padding: 14px;
+          margin-bottom: 12px;
+          box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .def-root .info-card h3 {
+          font-size: 13px;
+          color: ${colors.text};
+          margin-bottom: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .def-root .info-card .info-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+          font-size: 13px;
+          color: ${colors.textSecondary};
+          padding: 6px 0;
+          border-bottom: 1px solid rgba(85, 107, 47, 0.3);
+        }
+        .def-root .info-card .info-row:last-child {
+          border-bottom: none;
+          margin-bottom: 0;
+        }
+        .def-root .info-card .info-row span:last-child {
+          color: ${colors.text};
+          font-weight: 600;
+          font-family: 'Orbitron', sans-serif;
         }
         .def-root section h2 {
-          color: #eee;
+          color: ${colors.text};
           font-weight: 600;
-          margin-bottom: 12px;
-          user-select: none;
+          margin-bottom: 16px;
+          font-size: 16px;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          font-family: 'Orbitron', sans-serif;
+          border-bottom: 2px solid ${colors.primary};
+          padding-bottom: 8px;
         }
         .def-root #map-container {
           height: 100%;
-          border-radius: 6px;
+          border-radius: 4px;
           overflow: hidden;
-          background: #1a1a1a;
+          background: ${colors.bgDark};
           position: relative;
+          border: 1px solid ${colors.border};
         }
         .def-root #map-container .mapboxgl-map {
           width: 100%;
@@ -410,9 +609,9 @@ export function DefensiveDashboard() {
         }
         .def-root #camera-frame,
         .def-root #last-drone-frame {
-          background: #222;
-          border-radius: 6px;
-          border: 3px solid #a063ff;
+          background: ${colors.bgDark};
+          border-radius: 4px;
+          border: 2px solid ${colors.border};
           overflow: hidden;
           position: relative;
         }
@@ -420,47 +619,43 @@ export function DefensiveDashboard() {
         .def-root #last-drone-frame img {
           width: 100%;
           display: block;
-          object-fit: cover;
+          object-fit: contain;
         }
         .def-root #drone-list {
           display: flex;
           flex-direction: column;
-          gap: 12px;
+          gap: 10px;
           overflow-y: auto;
-          max-height: calc(100vh - 220px);
+          max-height: calc(100vh - 250px);
           user-select: none;
         }
         .def-root .drone-item {
-          display: flex;
-          background: rgba(255 255 255 / 0.1);
-          border-radius: 8px;
-          box-shadow: 0 0 8px #0008 inset;
+          background: ${colors.bgDark};
+          border: 1px solid ${colors.border};
+          border-radius: 4px;
           cursor: pointer;
-          transition: background-color 0.2s;
-          padding: 6px;
+          transition: all 0.2s;
+          padding: 12px;
+          box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
         }
         .def-root .drone-item:hover {
-          background: rgba(255 255 255 / 0.2);
-        }
-        .def-root .drone-image {
-          width: 90px;
-          height: 70px;
-          flex-shrink: 0;
-          border: 2px solid #a063ff;
-          border-radius: 6px;
-          margin-right: 10px;
-          background: #111;
+          background: ${colors.bgLight};
+          border-color: ${colors.accent};
+          box-shadow: 0 2px 8px rgba(107, 142, 35, 0.3), inset 0 2px 4px rgba(0,0,0,0.3);
+          transform: translateX(4px);
         }
         .def-root .drone-info {
-          font-size: 13px;
-          color: #ddd;
-          line-height: 1.3em;
-          white-space: pre-line;
-          flex-grow: 1;
+          font-size: 12px;
+          color: ${colors.textSecondary};
+          line-height: 1.6em;
         }
-        .def-root #drone-list::-webkit-scrollbar { width: 7px; }
-        .def-root #drone-list::-webkit-scrollbar-thumb { background: #a063ff88; border-radius: 4px; }
-        .def-root #drone-list::-webkit-scrollbar-track { background: transparent; }
+        .def-root .drone-info strong {
+          color: ${colors.text};
+          font-weight: 600;
+        }
+        .def-root #drone-list::-webkit-scrollbar { width: 8px; }
+        .def-root #drone-list::-webkit-scrollbar-thumb { background: ${colors.border}; border-radius: 4px; }
+        .def-root #drone-list::-webkit-scrollbar-track { background: ${colors.bgDark}; }
         @media screen and (max-width: 1200px) {
           .def-root .grid {
             grid-template-columns: 1fr 1fr;
@@ -469,8 +664,37 @@ export function DefensiveDashboard() {
         }
       `}</style>
       <div className="def-root">
+        <h1>🛡️ Defensive Command Dashboard</h1>
+        
+        {/* Stats Cards */}
+        <div className="stats-grid">
+          <div className="stat-card">
+            <h3>⚠️ Detected Threats</h3>
+            <div className="stat-value">{detectedImages.length}</div>
+          </div>
+          <div className="stat-card">
+            <h3>⚔️ Threat Level</h3>
+            <div className="stat-value" style={{ fontSize: "24px" }}>
+              {detectedImages.length > 10 ? "HIGH" : detectedImages.length > 5 ? "MED" : "LOW"}
+            </div>
+          </div>
+          <div className="stat-card">
+            <h3>👥 Personnel Count</h3>
+            <div className="stat-value">{peopleCount}</div>
+          </div>
+          <div className="stat-card">
+            <h3>🌡️ Weather</h3>
+            <div className="stat-value" style={{ fontSize: "24px" }}>
+              {weather ? `${weather.temperature}°C` : "N/A"}
+            </div>
+            <div style={{ fontSize: "11px", color: colors.textSecondary, marginTop: "6px", textTransform: "uppercase" }}>
+              {weather ? weather.condition : ""}
+            </div>
+          </div>
+        </div>
+
         <div className="grid">
-          <section id="realtime-map" aria-label="Realtime Map Section" style={{ gridColumn: "1 / 2", gridRow: "1 / 3" }}>
+          <section id="realtime-map" aria-label="Realtime Map Section" style={{ gridColumn: "1 / 2", gridRow: "1 / 4" }}>
             <h2>
               Realtime Map
               <button
@@ -482,13 +706,18 @@ export function DefensiveDashboard() {
                 }}
                 style={{
                   marginLeft: "10px",
-                  padding: "4px 12px",
+                  padding: "6px 14px",
                   fontSize: "11px",
-                  background: isLockingCamera ? "#ff6b6b" : "#4CAF50",
-                  color: "white",
-                  border: "none",
+                  background: isLockingCamera ? colors.danger : colors.success,
+                  color: colors.text,
+                  border: `1px solid ${colors.border}`,
                   borderRadius: "4px",
-                  cursor: "pointer"
+                  cursor: "pointer",
+                  fontWeight: "600",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.3)",
+                  transition: "all 0.2s"
                 }}
                 title={isLockingCamera ? "คลิกเพื่อยกเลิก" : "คลิกเพื่อกำหนดตำแหน่งกล้อง"}
               >
@@ -498,25 +727,29 @@ export function DefensiveDashboard() {
             {selectedCameraPosition && (
               <div style={{ 
                 marginBottom: "8px", 
-                padding: "8px", 
-                background: "rgba(76, 175, 80, 0.2)", 
+                padding: "10px", 
+                background: colors.bgMedium, 
+                border: `1px solid ${colors.success}`,
                 borderRadius: "4px",
                 fontSize: "12px",
-                color: "#4CAF50"
+                color: colors.success,
+                fontWeight: "600"
               }}>
-                <strong>ตำแหน่งกล้อง:</strong> Lat: {selectedCameraPosition.lat.toFixed(6)}, Lng: {selectedCameraPosition.lng.toFixed(6)}
+                <strong>📍 Camera Position:</strong> Lat: {selectedCameraPosition.lat.toFixed(6)}, Lng: {selectedCameraPosition.lng.toFixed(6)}
               </div>
             )}
             {isLockingCamera && (
               <div style={{ 
                 marginBottom: "8px", 
-                padding: "8px", 
-                background: "rgba(255, 193, 7, 0.2)", 
+                padding: "10px", 
+                background: colors.bgMedium, 
+                border: `1px solid ${colors.warning}`,
                 borderRadius: "4px",
                 fontSize: "12px",
-                color: "#FFC107"
+                color: colors.warning,
+                fontWeight: "600"
               }}>
-                💡 คลิกบนแผนที่เพื่อกำหนดตำแหน่งกล้อง
+                💡 Click on map to set camera position
               </div>
             )}
             <div id="map-container" className="box" tabIndex={0} aria-describedby="map-desc" style={{ position: "relative" }}>
@@ -526,12 +759,12 @@ export function DefensiveDashboard() {
           </section>
 
           <section id="realtime-camera" aria-label="Realtime Camera Section" style={{ gridColumn: "2 / 3", gridRow: "1 / 2" }}>
-            <h2>Realtime Camera {connectionStatus === "connected" && <span style={{ fontSize: 12, color: "#33ff33" }}>● Live</span>}</h2>
-            <div id="camera-frame" className="box" tabIndex={0} aria-describedby="camera-desc">
+            <h2>📷 Realtime Camera {connectionStatus === "connected" && <span style={{ fontSize: 12, color: colors.success, fontWeight: "700" }}>● LIVE</span>}</h2>
+            <div id="camera-frame" className="box" tabIndex={0} aria-describedby="camera-desc" style={{ minHeight: "200px" }}>
               {droneData?.image ? (
                 <img src={droneData.image} alt="Live camera stream" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
               ) : (
-                <div style={{ width: "100%", height: "200px", display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>
+                <div style={{ width: "100%", height: "200px", display: "flex", alignItems: "center", justifyContent: "center", color: colors.textSecondary }}>
                   Waiting for image data...
                 </div>
               )}
@@ -539,103 +772,161 @@ export function DefensiveDashboard() {
             <div
               id="camera-label"
               aria-live="polite"
-              style={{ marginTop: 6, fontSize: 13, color: "#bbb", textAlign: "center", lineHeight: 1.4 }}
+              style={{ marginTop: 8, fontSize: 12, color: colors.textSecondary, textAlign: "center", lineHeight: 1.4 }}
             >
               {droneData ? (
                 <>
-                  <div>{droneData.imagePath ? `Image: ${droneData.imagePath}` : "Image file: unknown"}</div>
-                  <div>{hasCSVData ? `Details file: ${droneData.csvPath}` : "Details unavailable"}</div>
+                  <div style={{ fontSize: "11px" }}>{droneData.imagePath ? `📁 Image: ${droneData.imagePath}` : "Image file: unknown"}</div>
+                  <div style={{ fontSize: "11px" }}>{hasCSVData ? `📊 Details: ${droneData.csvPath}` : "Details unavailable"}</div>
                 </>
               ) : (
-                "Camera : 1 100,2000 - 200,100"
+                <div style={{ fontSize: "11px" }}>Camera feed: Standby</div>
               )}
             </div>
             <div id="camera-desc" className="visually-hidden">Live camera feed</div>
           </section>
 
-          <section id="last-detected-drone" aria-label="Last Detected Drone Section" style={{ gridColumn: "2 / 3", gridRow: "2 / 3" }}>
-            <h2>
-              Last Detected Drone
-              <button 
-                onClick={fetchDetectedImages}
-                style={{ 
-                  marginLeft: "10px", 
-                  padding: "4px 8px", 
-                  fontSize: "11px", 
-                  background: "#a063ff", 
-                  color: "white", 
-                  border: "none", 
-                  borderRadius: "4px", 
-                  cursor: "pointer" 
-                }}
-                title="Refresh detected images"
-              >
-                ↻ Refresh
-              </button>
-            </h2>
-            <div id="last-drone-frame" className="box" tabIndex={0} aria-describedby="last-drone-desc">
-              {latestDetectedImage ? (
-                <img 
-                  src={`/api/detected/images/${latestDetectedImage}`} 
-                  alt="Latest detected drone" 
-                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
-                  onError={(e) => {
-                    console.error(`[DefensiveDashboard] Failed to load detected image: ${latestDetectedImage}`);
-                    console.error(`[DefensiveDashboard] Image URL: /api/detected/images/${latestDetectedImage}`);
-                    e.target.style.display = "none";
-                    setDetectedImagesError(`Failed to load image: ${latestDetectedImage}`);
-                  }}
-                />
+          {/* Latency and Duration Graph */}
+          <section id="latency-duration-graph" aria-label="Latency and Duration Graph" style={{ gridColumn: "2 / 3", gridRow: "2 / 3" }}>
+            <h2>📊 System Performance Metrics</h2>
+            <div className="chart-container">
+              {latencyDurationData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart data={latencyDurationData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.border} opacity={0.3} />
+                    <XAxis 
+                      dataKey="time" 
+                      stroke={colors.textSecondary}
+                      tick={{ fill: colors.textSecondary, fontSize: 10 }}
+                      angle={-45}
+                      textAnchor="end"
+                      height={70}
+                    />
+                    <YAxis 
+                      yAxisId="left"
+                      stroke={colors.accent}
+                      tick={{ fill: colors.accent, fontSize: 10 }}
+                      label={{ value: "Latency (ms)", angle: -90, position: "insideLeft", fill: colors.accent, style: { fontSize: 11 } }}
+                    />
+                    <YAxis 
+                      yAxisId="right"
+                      orientation="right"
+                      stroke={colors.warning}
+                      tick={{ fill: colors.warning, fontSize: 10 }}
+                      label={{ value: "Duration (ms)", angle: 90, position: "insideRight", fill: colors.warning, style: { fontSize: 11 } }}
+                    />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: colors.bgMedium, 
+                        border: `1px solid ${colors.border}`, 
+                        color: colors.text,
+                        borderRadius: "4px"
+                      }}
+                    />
+                    <Legend 
+                      wrapperStyle={{ color: colors.text, fontSize: "12px" }}
+                    />
+                    <Line 
+                      yAxisId="left"
+                      type="monotone" 
+                      dataKey="latency" 
+                      stroke={colors.accent} 
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: colors.accent }}
+                      activeDot={{ r: 5 }}
+                      name="Latency (ms)"
+                    />
+                    <Line 
+                      yAxisId="right"
+                      type="monotone" 
+                      dataKey="duration" 
+                      stroke={colors.warning} 
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: colors.warning }}
+                      activeDot={{ r: 5 }}
+                      name="Duration (ms)"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
               ) : (
-                <div style={{ width: "100%", height: "200px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#888", gap: "8px" }}>
-                  {detectedImagesError ? (
-                    <>
-                      <div style={{ color: "#ff6b6b", fontSize: "12px" }}>{detectedImagesError}</div>
-                      <div style={{ fontSize: "11px" }}>Check browser console (F12) for details</div>
-                      <button 
-                        onClick={fetchDetectedImages}
-                        style={{ 
-                          marginTop: "8px",
-                          padding: "6px 12px", 
-                          fontSize: "12px", 
-                          background: "#a063ff", 
-                          color: "white", 
-                          border: "none", 
-                          borderRadius: "4px", 
-                          cursor: "pointer" 
-                        }}
-                      >
-                        Try Again
-                      </button>
-                    </>
-                  ) : (
-                    "No detected images yet"
-                  )}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "250px", color: colors.textSecondary }}>
+                  Loading chart data...
                 </div>
               )}
             </div>
-
-            <div
-              id="last-drone-label"
-              aria-live="polite"
-              style={{ fontSize: 14, textAlign: "center", marginTop: 6, color: "#ddd", lineHeight: 1.4 }}
-            >
-              <div>
-                {latestDetectedImage
-                  ? `ภาพโดรนที่ตรวจจับล่าสุด - ${latestDetectedImage}`
-                  : "ภาพโดรนที่ตรวจจับล่าสุด"}
-              </div>
-              {detectedImages.length > 0 && (
-                <div style={{ fontSize: 12, color: "#aaa" }}>Total: {detectedImages.length} images</div>
-              )}
-              {!hasCSVData && <div style={{ fontSize: 12, color: "#aaa" }}>รายละเอียดไม่พร้อมใช้งาน</div>}
-            </div>
-            <div id="last-drone-desc" className="visually-hidden">Latest detected drone</div>
           </section>
 
-          <section id="drone-list-section" aria-label="รายการโดรนที่ตรวจจับได้" style={{ gridColumn: "3 / 4", gridRow: "1 / 3" }}>
+          {/* Attack and Defense Times */}
+          <section id="attack-defense-times" aria-label="Attack and Defense Times" style={{ gridColumn: "2 / 3", gridRow: "3 / 4" }}>
+            <h2>⏱️ Response Times</h2>
+            <div className="info-card">
+              <div className="info-row">
+                <span>⚔️ Time to Attack:</span>
+                <span style={{ color: colors.danger, fontWeight: "700", fontSize: "14px" }}>
+                  {attackDefenseTimes.timeToAttack}s
+                </span>
+              </div>
+              <div className="info-row">
+                <span>🛡️ Time to Defense:</span>
+                <span style={{ color: colors.success, fontWeight: "700", fontSize: "14px" }}>
+                  {attackDefenseTimes.timeToDefense}s
+                </span>
+              </div>
+            </div>
+            <div className="info-card">
+              <h3>🌤️ Environmental Conditions</h3>
+              {weather ? (
+                <>
+                  <div className="info-row">
+                    <span>Condition:</span>
+                    <span>{weather.condition}</span>
+                  </div>
+                  <div className="info-row">
+                    <span>Temperature:</span>
+                    <span>{weather.temperature}°C</span>
+                  </div>
+                  <div className="info-row">
+                    <span>Humidity:</span>
+                    <span>{weather.humidity}%</span>
+                  </div>
+                  <div className="info-row">
+                    <span>Wind Speed:</span>
+                    <span>{weather.windSpeed} km/h</span>
+                  </div>
+                  <div className="info-row">
+                    <span>Visibility:</span>
+                    <span>{weather.visibility} km</span>
+                  </div>
+                </>
+              ) : (
+                <div style={{ color: colors.textSecondary, fontSize: "12px", padding: "20px", textAlign: "center" }}>
+                  Loading environmental data...
+                </div>
+              )}
+            </div>
+            <div className="info-card">
+              <h3>👥 Personnel in Operational Zone</h3>
+              <div style={{ 
+                fontSize: "48px", 
+                fontWeight: "700", 
+                color: colors.warning, 
+                textAlign: "center", 
+                padding: "20px",
+                fontFamily: "'Orbitron', sans-serif",
+                textShadow: `0 2px 8px rgba(218, 165, 32, 0.5)`
+              }}>
+                {peopleCount}
+              </div>
+              <div style={{ textAlign: "center", color: colors.textSecondary, fontSize: "11px", textTransform: "uppercase", letterSpacing: "1px" }}>
+                Personnel Detected
+              </div>
+            </div>
+          </section>
+
+          {/* Drone Log List */}
+          <section id="drone-list-section" aria-label="รายการโดรนที่ตรวจจับได้" style={{ gridColumn: "3 / 4", gridRow: "1 / 4" }}>
             <h2 style={{ marginBottom: 12 }}>
-              Drone List {detectedImages.length > 0 ? `(${detectedImages.length})` : ""}
+              ⚠️ Threat Log ({detectedImages.length})
             </h2>
             <div id="drone-list">
               {detectedImages.length > 0 ? (
@@ -644,52 +935,105 @@ export function DefensiveDashboard() {
                   const hasCSV = csvData !== undefined && csvData !== null;
                   const isLoading = csvData === undefined;
                   
+                  // Get lat/lng for distance calculation
+                  const lat = csvData?.latitude || csvData?.lat;
+                  const lng = csvData?.longitude || csvData?.lng;
+                  const latNum = lat ? parseFloat(lat) : null;
+                  const lngNum = lng ? parseFloat(lng) : null;
+                  const activeCameraPos = selectedCameraPosition || (cameraPositions.length > 0 ? cameraPositions[0] : null);
+                  const distance = (latNum && lngNum && activeCameraPos && activeCameraPos.lat && activeCameraPos.lng)
+                    ? calculateDistance(activeCameraPos.lat, activeCameraPos.lng, latNum, lngNum)
+                    : null;
+                  
                   return (
-                    <article key={imageFilename} className="drone-item" tabIndex={0} role="region" aria-labelledby={`title-drone-${index}`}>
-                      <div className="drone-image">
-                        <img 
-                          src={`/api/detected/images/${imageFilename}`} 
-                          alt={`Drone ${index + 1}`} 
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                          onError={(e) => {
-                            console.error(`[DefensiveDashboard] Failed to load detected image: ${imageFilename}`);
-                            e.target.style.display = "none";
-                          }}
-                        />
-                      </div>
+                    <article 
+                      key={imageFilename} 
+                      className="drone-item" 
+                      tabIndex={0} 
+                      role="region" 
+                      aria-labelledby={`title-drone-${index}`}
+                      onClick={() => {
+                        if (hasCSV && latNum && lngNum) {
+                          setSelectedDrone({
+                            imageFilename,
+                            csvData,
+                            lat: latNum,
+                            lng: lngNum,
+                            distance
+                          });
+                        }
+                      }}
+                      style={{ cursor: hasCSV && latNum && lngNum ? "pointer" : "default" }}
+                    >
                       <div className="drone-info" id={`title-drone-${index}`}>
+                        <div style={{ 
+                          fontSize: "12px", 
+                          color: colors.accent, 
+                          marginBottom: "8px", 
+                          fontWeight: "700",
+                          fontFamily: "'Orbitron', sans-serif",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.5px"
+                        }}>
+                          🎯 Threat ID: {imageFilename}
+                        </div>
                         {isLoading ? (
-                          <div style={{ fontSize: "11px", color: "#aaa", fontStyle: "italic" }}>
-                            Loading details...
+                          <div style={{ fontSize: "11px", color: colors.textSecondary, fontStyle: "italic" }}>
+                            Loading threat data...
                           </div>
                         ) : hasCSV ? (
-                          // Show CSV data if available
-                          Object.entries(csvData).map(([key, value]) => (
-                            <React.Fragment key={key}>
-                              <strong>{key} :</strong> {value || "N/A"}<br />
-                            </React.Fragment>
-                          ))
-                        ) : (
-                          // Show "none" or "null" when CSV is not available
                           <>
-                            <strong>Status :</strong> none<br />
-                            <strong>Details :</strong> null<br />
-                            <strong>Data :</strong> null<br />
+                            {distance && (
+                              <div style={{ fontSize: "11px", color: colors.warning, marginBottom: "6px", fontWeight: "600" }}>
+                                📏 Distance: <strong>{distance} km</strong>
+                              </div>
+                            )}
+                            {latNum && lngNum && (
+                              <div style={{ fontSize: "11px", color: colors.textSecondary, marginBottom: "6px" }}>
+                                📍 Coordinates: <strong style={{ color: colors.text }}>{latNum.toFixed(4)}, {lngNum.toFixed(4)}</strong>
+                              </div>
+                            )}
+                            {/* Show key CSV data fields */}
+                            {Object.entries(csvData)
+                              .filter(([key]) => !['latitude', 'longitude', 'lat', 'lng', 'image_name', 'image_name'].includes(key.toLowerCase()))
+                              .slice(0, 5)
+                              .map(([key, value]) => (
+                                <div key={key} style={{ fontSize: "11px", marginBottom: "4px", color: colors.textSecondary }}>
+                                  <strong style={{ color: colors.text }}>{key}:</strong> <span style={{ color: colors.text }}>{value || "N/A"}</span>
+                                </div>
+                              ))}
+                            {Object.entries(csvData).length > 5 && (
+                              <div style={{ fontSize: "10px", color: colors.accent, fontStyle: "italic", marginTop: "6px", fontWeight: "600" }}>
+                                ▶ Click for detailed analysis
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: "11px", color: colors.text }}>
+                              <strong>Status:</strong> Threat Detected
+                            </div>
+                            <div style={{ fontSize: "10px", color: colors.textSecondary, marginTop: "4px" }}>
+                              No additional data available
+                            </div>
                           </>
                         )}
                       </div>
                     </article>
                   );
                 })
-              ) : (
-                <div style={{ padding: 20, textAlign: "center", color: "#888", lineHeight: 1.4 }}>
-                  {connectionStatus !== "connected"
-                    ? "Not connected to server"
-                    : detectedImagesError
-                      ? detectedImagesError
-                      : "Waiting for detected images..."}
-                </div>
-              )}
+                ) : (
+                  <div style={{ padding: "30px", textAlign: "center", color: colors.textSecondary, lineHeight: "1.6" }}>
+                    {connectionStatus !== "connected"
+                      ? "Not connected to server"
+                      : detectedImagesError
+                        ? detectedImagesError
+                        : "No threats detected"}
+                    <div style={{ fontSize: "11px", marginTop: "8px" }}>
+                      System monitoring active
+                    </div>
+                  </div>
+                )}
             </div>
           </section>
         </div>
@@ -713,16 +1057,16 @@ export function DefensiveDashboard() {
           }}
           onClick={() => setSelectedDrone(null)}
         >
-          <div 
+            <div 
             style={{
-              background: "#1a1a1a",
-              borderRadius: "12px",
-              padding: "24px",
-              maxWidth: "600px",
+              background: `linear-gradient(135deg, ${colors.bgMedium} 0%, ${colors.bgLight} 100%)`,
+              borderRadius: "4px",
+              padding: "28px",
+              maxWidth: "700px",
               maxHeight: "90vh",
               overflowY: "auto",
-              border: "2px solid #a063ff",
-              boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+              border: `2px solid ${colors.border}`,
+              boxShadow: `0 8px 32px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.1)`,
               position: "relative"
             }}
             onClick={(e) => e.stopPropagation()}
@@ -733,70 +1077,81 @@ export function DefensiveDashboard() {
                 position: "absolute",
                 top: "12px",
                 right: "12px",
-                background: "#ff6b6b",
-                color: "white",
-                border: "none",
-                borderRadius: "50%",
+                background: colors.danger,
+                color: colors.text,
+                border: `1px solid ${colors.border}`,
+                borderRadius: "4px",
                 width: "32px",
                 height: "32px",
                 cursor: "pointer",
                 fontSize: "18px",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center"
+                justifyContent: "center",
+                fontWeight: "700",
+                boxShadow: "0 2px 4px rgba(0,0,0,0.3)"
               }}
             >
               ×
             </button>
             
-            <h2 style={{ color: "#fff", marginBottom: "20px", marginTop: "0" }}>
-              ข้อมูลโดรนที่ตรวจจับได้
+            <h2 style={{ 
+              color: colors.text, 
+              marginBottom: "20px", 
+              marginTop: "0",
+              fontFamily: "'Orbitron', sans-serif",
+              textTransform: "uppercase",
+              letterSpacing: "1px",
+              borderBottom: `2px solid ${colors.primary}`,
+              paddingBottom: "12px"
+            }}>
+              🎯 Threat Analysis Report
             </h2>
             
-            <div style={{ marginBottom: "20px" }}>
-              <img 
-                src={`/api/detected/images/${selectedDrone.imageFilename}`}
-                alt={selectedDrone.imageFilename}
-                style={{
-                  width: "100%",
-                  maxHeight: "400px",
-                  objectFit: "contain",
-                  borderRadius: "8px",
-                  border: "2px solid #a063ff"
-                }}
-                onError={(e) => {
-                  e.target.style.display = "none";
-                }}
-              />
-            </div>
-            
-            <div style={{ color: "#ddd", fontSize: "14px", lineHeight: "1.8" }}>
-              <div style={{ marginBottom: "12px" }}>
-                <strong style={{ color: "#a063ff" }}>ชื่อไฟล์:</strong> {selectedDrone.imageFilename}
+            <div style={{ color: colors.text, fontSize: "14px", lineHeight: "1.8" }}>
+              <div style={{ marginBottom: "16px", padding: "12px", background: colors.bgDark, borderRadius: "4px", border: `1px solid ${colors.border}` }}>
+                <strong style={{ color: colors.accent, fontSize: "13px", textTransform: "uppercase" }}>Threat ID:</strong> 
+                <div style={{ color: colors.text, marginTop: "4px", fontFamily: "'Orbitron', sans-serif" }}>{selectedDrone.imageFilename}</div>
               </div>
               
-              <div style={{ marginBottom: "12px" }}>
-                <strong style={{ color: "#a063ff" }}>ตำแหน่ง:</strong><br/>
-                Latitude: {selectedDrone.lat.toFixed(6)}<br/>
-                Longitude: {selectedDrone.lng.toFixed(6)}
-              </div>
+              {selectedDrone.lat && selectedDrone.lng && (
+                <div style={{ marginBottom: "16px", padding: "12px", background: colors.bgDark, borderRadius: "4px", border: `1px solid ${colors.border}` }}>
+                  <strong style={{ color: colors.accent, fontSize: "13px", textTransform: "uppercase" }}>📍 Location Coordinates:</strong>
+                  <div style={{ color: colors.text, marginTop: "6px", fontFamily: "'Orbitron', sans-serif" }}>
+                    Latitude: <strong>{selectedDrone.lat.toFixed(6)}</strong><br/>
+                    Longitude: <strong>{selectedDrone.lng.toFixed(6)}</strong>
+                  </div>
+                </div>
+              )}
               
               {selectedDrone.distance && (
-                <div style={{ marginBottom: "12px", color: "#4CAF50" }}>
-                  <strong>ระยะห่างจากกล้อง:</strong> {selectedDrone.distance} km
+                <div style={{ marginBottom: "16px", padding: "12px", background: colors.bgDark, borderRadius: "4px", border: `1px solid ${colors.warning}` }}>
+                  <strong style={{ color: colors.warning, fontSize: "13px", textTransform: "uppercase" }}>📏 Distance from Command Center:</strong>
+                  <div style={{ color: colors.text, marginTop: "6px", fontSize: "18px", fontWeight: "700", fontFamily: "'Orbitron', sans-serif" }}>
+                    {selectedDrone.distance} km
+                  </div>
                 </div>
               )}
               
               {selectedDrone.csvData && (
-                <div style={{ marginTop: "16px", paddingTop: "16px", borderTop: "1px solid #444" }}>
-                  <strong style={{ color: "#a063ff" }}>รายละเอียดเพิ่มเติม:</strong>
-                  {Object.entries(selectedDrone.csvData)
-                    .filter(([key]) => key !== 'latitude' && key !== 'longitude' && key !== 'image_name')
-                    .map(([key, value]) => (
-                      <div key={key} style={{ marginTop: "8px" }}>
-                        <strong>{key}:</strong> {value || "N/A"}
-                      </div>
-                    ))}
+                <div style={{ marginTop: "20px", paddingTop: "20px", borderTop: `2px solid ${colors.border}` }}>
+                  <strong style={{ color: colors.accent, fontSize: "14px", textTransform: "uppercase", letterSpacing: "1px" }}>📊 Detailed Threat Data:</strong>
+                  <div style={{ marginTop: "12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                    {Object.entries(selectedDrone.csvData)
+                      .filter(([key]) => key !== 'latitude' && key !== 'longitude' && key !== 'image_name')
+                      .map(([key, value]) => (
+                        <div key={key} style={{ 
+                          marginTop: "8px", 
+                          padding: "8px", 
+                          background: colors.bgDark, 
+                          borderRadius: "4px",
+                          border: `1px solid ${colors.border}`
+                        }}>
+                          <strong style={{ color: colors.textSecondary, fontSize: "11px", textTransform: "uppercase" }}>{key}:</strong>
+                          <div style={{ color: colors.text, marginTop: "4px", fontWeight: "600" }}>{value || "N/A"}</div>
+                        </div>
+                      ))}
+                  </div>
                 </div>
               )}
             </div>

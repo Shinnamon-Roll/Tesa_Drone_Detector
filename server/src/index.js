@@ -6,6 +6,8 @@ import chokidar from "chokidar";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import mqtt from "mqtt";
+import multer from "multer";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,6 +37,45 @@ console.log(`[server] DETECTED_DIR: ${DETECTED_DIR}`);
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Configure multer for image upload (from Pi 5)
+const storage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    try {
+      // Ensure detected directory exists
+      await fs.mkdir(DETECTED_DIR, { recursive: true });
+      cb(null, DETECTED_DIR);
+    } catch (error) {
+      cb(error, null);
+    }
+  },
+  filename: (req, file, cb) => {
+    // Use original filename if provided, otherwise generate one
+    const timestamp = Date.now();
+    const ext = path.extname(file.originalname) || '.jpg';
+    const filename = req.body.imageName || `img_${timestamp}${ext}`;
+    cb(null, filename);
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit for images
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (extname && mimetype) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed (jpeg, jpg, png, gif)'));
+    }
+  }
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "tesa-drone-detector-backend" });
@@ -274,6 +315,115 @@ app.get("/api/csv/for-image/:imageFilename", async (req, res) => {
   }
 });
 
+// Endpoint to upload detected images from Pi 5 (after AI detection)
+app.post("/api/detected/upload", upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' });
+    }
+    
+    const imageFile = req.file;
+    const timestamp = new Date().toISOString();
+    
+    console.log(`[API] [${timestamp}] Received detected image upload from Pi 5: ${imageFile.filename}`);
+    
+    // Parse CSV data from request body
+    let csvData = null;
+    try {
+      if (req.body.csvData) {
+        csvData = typeof req.body.csvData === 'string' 
+          ? JSON.parse(req.body.csvData) 
+          : req.body.csvData;
+      } else if (req.body.latitude || req.body.longitude) {
+        // If CSV data is provided as individual fields
+        csvData = {
+          image_name: imageFile.filename,
+          latitude: req.body.latitude || req.body.lat,
+          longitude: req.body.longitude || req.body.lng,
+          confidence: req.body.confidence || 1.0,
+          bbox_x1: req.body.bbox_x1 || null,
+          bbox_y1: req.body.bbox_y1 || null,
+          bbox_x2: req.body.bbox_x2 || null,
+          bbox_y2: req.body.bbox_y2 || null,
+          frame_number: req.body.frame_number || req.body.frameNumber || null,
+          timestamp: req.body.timestamp || timestamp,
+          camera_id: req.body.cameraId || req.body.camera_id || 'pi5',
+          camera_name: req.body.cameraName || req.body.camera_name || 'Pi 5 Camera'
+        };
+      }
+    } catch (parseError) {
+      console.error(`[API] [${timestamp}] Error parsing CSV data:`, parseError);
+    }
+    
+    // Save CSV data if provided
+    if (csvData) {
+      try {
+        // Ensure CSV directory exists
+        await fs.mkdir(CSV_DIR, { recursive: true });
+        
+        // Generate CSV filename (same name as image but with .csv extension)
+        const csvFilename = imageFile.filename.replace(/\.(jpg|jpeg|png|gif)$/i, '.csv');
+        const csvPath = path.join(CSV_DIR, csvFilename);
+        
+        // Ensure image_name matches the actual filename
+        csvData.image_name = imageFile.filename;
+        
+        // Create CSV content (format: header row, then data row)
+        // Match the format used by existing CSV files (e.g., test_predictions.csv)
+        const csvHeader = Object.keys(csvData).join(',');
+        
+        // Create CSV data row - quote values that might contain commas or special characters
+        const csvRow = Object.values(csvData).map(value => {
+          if (value === null || value === undefined) {
+            return '';
+          }
+          const str = String(value);
+          // Quote if contains comma, newline, or quote
+          if (str.includes(',') || str.includes('\n') || str.includes('"') || str.includes('\r')) {
+            return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+        }).join(',');
+        
+        const csvContent = csvHeader + '\n' + csvRow;
+        
+        // Save CSV file
+        await fs.writeFile(csvPath, csvContent, 'utf-8');
+        
+        console.log(`[API] [${timestamp}] ✅ Saved CSV: ${csvFilename}`);
+        console.log(`[API] [${timestamp}] CSV Data:`, JSON.stringify(csvData));
+      } catch (csvError) {
+        console.error(`[API] [${timestamp}] ❌ Error saving CSV:`, csvError);
+      }
+    }
+    
+    // File watcher will detect new files and emit to frontend automatically
+    console.log(`[API] [${timestamp}] ✅ Image uploaded successfully: ${imageFile.filename}`);
+    console.log(`[API] [${timestamp}] File watcher will detect and emit to frontend`);
+    
+    // Emit event to connected clients
+    io.emit('new-detected-image', {
+      filename: imageFile.filename,
+      timestamp: timestamp,
+      csvData: csvData
+    });
+    
+    res.json({
+      success: true,
+      message: 'Image uploaded successfully',
+      filename: imageFile.filename,
+      csvData: csvData,
+      timestamp: timestamp
+    });
+  } catch (error) {
+    console.error(`[API] [${new Date().toISOString()}] ❌ Error uploading image:`, error);
+    res.status(500).json({ 
+      error: 'Failed to upload image', 
+      message: error.message 
+    });
+  }
+});
+
 // Endpoint to serve detected images
 app.get("/api/detected/images/:filename", async (req, res) => {
   try {
@@ -318,6 +468,316 @@ app.get("/api/detected/images/:filename", async (req, res) => {
     });
   }
 });
+
+// Endpoint to get latency and duration data
+app.get("/api/metrics/latency-duration", async (_req, res) => {
+  try {
+    // Generate sample latency and duration data (last 24 hours)
+    const now = new Date();
+    const data = [];
+    for (let i = 23; i >= 0; i--) {
+      const timestamp = new Date(now.getTime() - i * 60 * 60 * 1000);
+      data.push({
+        time: timestamp.toISOString(),
+        latency: Math.random() * 100 + 50, // 50-150ms
+        duration: Math.random() * 2000 + 1000 // 1000-3000ms
+      });
+    }
+    res.json({ data });
+  } catch (error) {
+    console.error("[api] Error getting latency/duration:", error);
+    res.status(500).json({ error: "Failed to get metrics", message: error.message });
+  }
+});
+
+// Endpoint to get attack and defense times
+app.get("/api/metrics/attack-defense", async (_req, res) => {
+  try {
+    const now = new Date();
+    res.json({
+      timeToAttack: Math.random() * 30 + 10, // 10-40 seconds
+      timeToDefense: Math.random() * 20 + 5, // 5-25 seconds
+      lastUpdated: now.toISOString()
+    });
+  } catch (error) {
+    console.error("[api] Error getting attack/defense times:", error);
+    res.status(500).json({ error: "Failed to get times", message: error.message });
+  }
+});
+
+// Endpoint to get team drones information
+app.get("/api/team/drones", async (_req, res) => {
+  try {
+    // Sample team drone data
+    const teamDrones = [
+      { id: 1, name: "Drone Alpha", status: "active", battery: 85, location: { lat: 13.7563, lng: 100.5018 } },
+      { id: 2, name: "Drone Beta", status: "active", battery: 92, location: { lat: 13.7500, lng: 100.5000 } },
+      { id: 3, name: "Drone Gamma", status: "standby", battery: 100, location: { lat: 13.7600, lng: 100.5100 } },
+      { id: 4, name: "Drone Delta", status: "maintenance", battery: 45, location: { lat: 13.7550, lng: 100.5050 } }
+    ];
+    res.json({ drones: teamDrones, total: teamDrones.length });
+  } catch (error) {
+    console.error("[api] Error getting team drones:", error);
+    res.status(500).json({ error: "Failed to get team drones", message: error.message });
+  }
+});
+
+// Endpoint to get weather information
+app.get("/api/weather", async (_req, res) => {
+  try {
+    // Sample weather data (in production, integrate with weather API)
+    const weatherConditions = ["Clear", "Cloudy", "Partly Cloudy", "Rainy", "Windy"];
+    const weather = {
+      condition: weatherConditions[Math.floor(Math.random() * weatherConditions.length)],
+      temperature: Math.round(Math.random() * 15 + 25), // 25-40°C
+      humidity: Math.round(Math.random() * 30 + 50), // 50-80%
+      windSpeed: Math.round(Math.random() * 20 + 5), // 5-25 km/h
+      visibility: Math.round(Math.random() * 5 + 8) // 8-13 km
+    };
+    res.json(weather);
+  } catch (error) {
+    console.error("[api] Error getting weather:", error);
+    res.status(500).json({ error: "Failed to get weather", message: error.message });
+  }
+});
+
+// Endpoint to get people count in attacking area
+app.get("/api/area/people-count", async (_req, res) => {
+  try {
+    const count = Math.floor(Math.random() * 20 + 5); // 5-25 people
+    res.json({ count, lastUpdated: new Date().toISOString() });
+  } catch (error) {
+    console.error("[api] Error getting people count:", error);
+    res.status(500).json({ error: "Failed to get people count", message: error.message });
+  }
+});
+
+// Store team drones data (will be updated via MQTT from MATLAB)
+// Format from MATLAB: { "lat": value, "lng": value, "height": value }
+// Only one drone is expected
+let teamDronesData = [];
+const DRONE_ID = 1; // Fixed ID for single drone
+
+// Endpoint to get team drones (for offensive dashboard)
+app.get("/api/offensive/drones", async (_req, res) => {
+  try {
+    res.json({ drones: teamDronesData, total: teamDronesData.length, lastUpdated: new Date().toISOString() });
+  } catch (error) {
+    console.error("[api] Error getting offensive drones:", error);
+    res.status(500).json({ error: "Failed to get offensive drones", message: error.message });
+  }
+});
+
+// Helper function to update drone data from MATLAB format
+// Expected format: { "lat": value, "lng": value, "height": value }
+function updateDroneData(data) {
+  try {
+    const timestamp = new Date().toISOString();
+    const lat = parseFloat(data.lat);
+    const lng = parseFloat(data.lng);
+    const height = parseFloat(data.height) || 0;
+    
+    // Validate data
+    if (isNaN(lat) || isNaN(lng)) {
+      console.error("[DRONE] Invalid lat/lng values:", { lat: data.lat, lng: data.lng });
+      return false;
+    }
+    
+    // Check if drone exists
+    const existingIndex = teamDronesData.findIndex(d => d.id === DRONE_ID);
+    
+    if (existingIndex >= 0) {
+      // Update existing drone
+      const previousLocation = teamDronesData[existingIndex].location;
+      teamDronesData[existingIndex] = {
+        id: DRONE_ID,
+        name: "Team Drone",
+        status: "active",
+        battery: 100,
+        location: { lat, lng },
+        height: height,
+        speed: 0,
+        heading: 0,
+        lastUpdate: timestamp,
+        previousLocation: previousLocation
+      };
+      console.log(`[DRONE] Updated drone ${DRONE_ID} - Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}, Height: ${height}m`);
+    } else {
+      // Add new drone
+      teamDronesData.push({
+        id: DRONE_ID,
+        name: "Team Drone",
+        status: "active",
+        battery: 100,
+        location: { lat, lng },
+        height: height,
+        speed: 0,
+        heading: 0,
+        lastUpdate: timestamp
+      });
+      console.log(`[DRONE] Added new drone ${DRONE_ID} - Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}, Height: ${height}m`);
+    }
+    
+    // Emit to all connected clients via Socket.IO
+    io.emit("team-drones-update", { drones: teamDronesData, timestamp });
+    console.log(`[DRONE] Emitted update to ${io.engine.clientsCount} connected client(s)`);
+    
+    return true;
+  } catch (error) {
+    console.error("[DRONE] Error updating drone data:", error);
+    return false;
+  }
+}
+
+// Endpoint to receive drone data from MATLAB (JSON POST)
+app.post("/api/offensive/drones/update", async (req, res) => {
+  try {
+    const droneData = req.body;
+    const timestamp = new Date().toISOString();
+    
+    console.log(`[API] [${timestamp}] Received drone update from MATLAB (HTTP POST):`, JSON.stringify(droneData));
+    
+    // Expected format: { "lat": value, "lng": value, "height": value }
+    const success = updateDroneData(droneData);
+    
+    if (success) {
+      res.json({ 
+        success: true, 
+        message: "Drone data updated successfully", 
+        drone: teamDronesData[0] || null,
+        timestamp 
+      });
+    } else {
+      res.status(400).json({ 
+        success: false, 
+        error: "Invalid drone data format", 
+        expected: { lat: "number", lng: "number", height: "number (optional)" },
+        received: droneData
+      });
+    }
+  } catch (error) {
+    console.error("[API] Error updating drone data:", error);
+    res.status(500).json({ error: "Failed to update drone data", message: error.message });
+  }
+});
+
+// MQTT Configuration (optional - for real-time updates from MATLAB)
+const MQTT_BROKER = process.env.MQTT_BROKER || "mqtt://localhost:1883";
+const MQTT_TOPIC = process.env.MQTT_TOPIC || "tesa/drones/offensive";
+let mqttClient = null;
+
+// Initialize MQTT client (if broker is available)
+function initializeMQTT() {
+  try {
+    mqttClient = mqtt.connect(MQTT_BROKER, {
+      clientId: `tesa-server-${Date.now()}`,
+      reconnectPeriod: 5000
+    });
+
+    mqttClient.on("connect", () => {
+      const timestamp = new Date().toISOString();
+      console.log(`[MQTT] [${timestamp}] ✅ Connected to broker: ${MQTT_BROKER}`);
+      mqttClient.subscribe(MQTT_TOPIC, (err) => {
+        if (err) {
+          console.error(`[MQTT] [${timestamp}] ❌ Error subscribing to ${MQTT_TOPIC}:`, err);
+        } else {
+          console.log(`[MQTT] [${timestamp}] ✅ Subscribed to topic: ${MQTT_TOPIC}`);
+          console.log(`[MQTT] [${timestamp}] 📡 Waiting for drone data from MATLAB...`);
+          console.log(`[MQTT] [${timestamp}] 📋 Expected format: { "lat": number, "lng": number, "height": number }`);
+        }
+      });
+    });
+
+    mqttClient.on("message", (topic, message) => {
+      try {
+        const timestamp = new Date().toISOString();
+        const messageStr = message.toString();
+        console.log(`[MQTT] [${timestamp}] Received message from topic "${topic}":`, messageStr);
+        
+        // Parse JSON message
+        const data = JSON.parse(messageStr);
+        console.log(`[MQTT] [${timestamp}] Parsed JSON data:`, JSON.stringify(data));
+        
+        // Expected format from MATLAB: { "lat": value, "lng": value, "height": value }
+        // Update drone data
+        const success = updateDroneData(data);
+        
+        if (success) {
+          console.log(`[MQTT] [${timestamp}] Successfully processed drone update from MATLAB`);
+        } else {
+          console.error(`[MQTT] [${timestamp}] Failed to process drone update - invalid data format`);
+        }
+      } catch (error) {
+        console.error(`[MQTT] [${new Date().toISOString()}] Error parsing message:`, error.message);
+        console.error(`[MQTT] Raw message:`, message.toString());
+      }
+    });
+
+    mqttClient.on("error", (error) => {
+      console.error(`[MQTT] [${new Date().toISOString()}] ❌ Error:`, error.message);
+    });
+
+    mqttClient.on("close", () => {
+      console.log(`[MQTT] [${new Date().toISOString()}] ⚠️  Connection closed`);
+    });
+
+    mqttClient.on("reconnect", () => {
+      console.log(`[MQTT] [${new Date().toISOString()}] 🔄 Reconnecting to broker...`);
+    });
+  } catch (error) {
+    console.warn("[MQTT] Failed to initialize MQTT client:", error.message);
+    console.warn("[MQTT] Will use HTTP POST endpoint instead");
+  }
+}
+
+// Watch for JSON file updates (alternative to MQTT)
+// Expected format: { "lat": value, "lng": value, "height": value }
+const DRONES_JSON_PATH = path.join(DATA_DIR, "team-drones.json");
+async function watchDronesFile() {
+  try {
+    // Check if file exists, create if not
+    try {
+      await fs.access(DRONES_JSON_PATH);
+    } catch {
+      // File doesn't exist, create empty file with comment
+      const defaultData = { lat: 0, lng: 0, height: 0 };
+      await fs.writeFile(DRONES_JSON_PATH, JSON.stringify(defaultData, null, 2));
+      console.log(`[WATCHER] Created default drones file: ${DRONES_JSON_PATH}`);
+      console.log(`[WATCHER] Expected format: { "lat": number, "lng": number, "height": number }`);
+    }
+
+    const watcher = chokidar.watch(DRONES_JSON_PATH, {
+      persistent: true,
+      ignoreInitial: false
+    });
+
+    watcher.on("change", async (filePath) => {
+      try {
+        const timestamp = new Date().toISOString();
+        console.log(`[WATCHER] [${timestamp}] 📁 Drones file changed: ${filePath}`);
+        const content = await fs.readFile(filePath, "utf-8");
+        const data = JSON.parse(content);
+        console.log(`[WATCHER] [${timestamp}] 📄 File content:`, JSON.stringify(data));
+        
+        // Expected format: { "lat": value, "lng": value, "height": value }
+        const success = updateDroneData(data);
+        
+        if (success) {
+          console.log(`[WATCHER] [${timestamp}] ✅ Successfully updated drone from file`);
+        } else {
+          console.error(`[WATCHER] [${timestamp}] ❌ Failed to update drone from file - invalid format`);
+        }
+      } catch (error) {
+        console.error(`[WATCHER] [${new Date().toISOString()}] ❌ Error reading drones file:`, error.message);
+      }
+    });
+
+    console.log(`[WATCHER] 👀 Watching drones file: ${DRONES_JSON_PATH}`);
+    console.log(`[WATCHER] 📋 Expected format: { "lat": number, "lng": number, "height": number }`);
+  } catch (error) {
+    console.warn(`[WATCHER] ⚠️  Failed to watch drones file:`, error.message);
+  }
+}
 
 // Helper function to read and parse CSV file
 async function readCSVFile(filePath) {
@@ -527,6 +987,12 @@ async function initialize() {
     console.warn(`[warning] Detected directory not found: ${DETECTED_DIR}`);
     console.warn(`[warning] Please ensure dataForWeb/detected directory exists`);
   }
+  
+  // Initialize MQTT client (optional)
+  initializeMQTT();
+  
+  // Watch for team drones JSON file (alternative to MQTT)
+  watchDronesFile();
 }
 
 initialize();
