@@ -35,6 +35,9 @@ const DETECTED_DIR = path.join(DATA_DIR, "detected");
 console.log(`[server] DATA_DIR: ${DATA_DIR}`);
 console.log(`[server] DETECTED_DIR: ${DETECTED_DIR}`);
 
+// Trust proxy for nginx reverse proxy
+app.set('trust proxy', true);
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
