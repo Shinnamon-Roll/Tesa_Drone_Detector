@@ -12,9 +12,9 @@ export function OffensiveDashboard() {
   const markersRef = useRef({});
   const socketRef = useRef(null);
   const flightPathsRef = useRef({}); // Store flight paths for each drone: { droneId: [[lng, lat], ...] }
-  
+
   const MAPBOX_TOKEN = "pk.eyJ1IjoiY2hhdGNoYWxlcm0iLCJhIjoiY21nZnpiYzU3MGRzdTJrczlkd3RxamN4YyJ9.k288gnCNLdLgczawiB79gQ";
-  
+
   // Military color theme (same as MainDashboard)
   const colors = {
     primary: "#4A5D23",      // Olive drab dark
@@ -52,24 +52,40 @@ export function OffensiveDashboard() {
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       reconnectionAttempts: 5,
-      path: "/socket.io/"
+      timeout: 20000,
+      path: "/socket.io/",
     });
 
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("[OffensiveDashboard] Connected to server");
+      console.log("[OffensiveDashboard] Connected to server, ID:", socket.id);
       setConnectionStatus("connected");
     });
 
-    socket.on("disconnect", () => {
-      console.log("[OffensiveDashboard] Disconnected from server");
+    socket.on("disconnect", (reason) => {
+      console.log("[OffensiveDashboard] Disconnected from server, reason:", reason);
       setConnectionStatus("disconnected");
     });
 
     socket.on("connect_error", (error) => {
-      console.error("[OffensiveDashboard] Connection error:", error);
+      console.error("[OffensiveDashboard] Connection error:", error.message);
+      setConnectionStatus("error");
+    });
+
+    socket.on("reconnect_attempt", (attemptNumber) => {
+      console.log("[OffensiveDashboard] Reconnection attempt:", attemptNumber);
+    });
+
+    socket.on("reconnect", (attemptNumber) => {
+      console.log("[OffensiveDashboard] Reconnected after", attemptNumber, "attempts");
+      setConnectionStatus("connected");
+    });
+
+    socket.on("reconnect_failed", () => {
+      console.error("[OffensiveDashboard] Reconnection failed");
       setConnectionStatus("error");
     });
 
@@ -81,28 +97,31 @@ export function OffensiveDashboard() {
 
     // Cleanup on unmount
     return () => {
-      socket.disconnect();
+      if (socket) {
+        socket.disconnect();
+        socketRef.current = null;
+      }
     };
   }, []);
 
   // Initialize Mapbox map
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
-    
+
     mapboxgl.accessToken = MAPBOX_TOKEN;
-    
-      const map = new mapboxgl.Map({
+
+    const map = new mapboxgl.Map({
       container: mapRef.current,
       style: "mapbox://styles/mapbox/dark-v11", // Dark style
       center: [101.217, 14.317], // Default center (Chulachomklao Royal Military Academy, Nakhon Nayok)
       zoom: 14 // Zoom out slightly to see more area around the academy
     });
-    
+
     mapInstanceRef.current = map;
-    
+
     map.on("load", () => {
       console.log("[OffensiveDashboard] Map loaded");
-      
+
       // Initialize flight path sources and layers
       map.addSource("flight-paths", {
         type: "geojson",
@@ -111,7 +130,7 @@ export function OffensiveDashboard() {
           features: []
         }
       });
-      
+
       // Add flight path layer
       map.addLayer({
         id: "flight-paths-line",
@@ -128,11 +147,11 @@ export function OffensiveDashboard() {
         }
       });
     });
-    
+
     map.on("error", (e) => {
       console.error("[OffensiveDashboard] Map error:", e);
     });
-    
+
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
@@ -140,14 +159,14 @@ export function OffensiveDashboard() {
       }
     };
   }, [MAPBOX_TOKEN]);
-  
+
   // Update map markers when team drones change
   useEffect(() => {
     if (!mapInstanceRef.current) return;
-    
+
     try {
       const map = mapInstanceRef.current;
-      
+
       // Wait for map to be fully loaded
       const updateWhenReady = () => {
         if (map.isStyleLoaded() && map.loaded()) {
@@ -159,12 +178,12 @@ export function OffensiveDashboard() {
           map.once("style.load", updateWhenReady);
         }
       };
-      
+
       updateWhenReady();
     } catch (error) {
       console.error("[OffensiveDashboard] Error in map markers effect:", error);
     }
-    
+
     function updateMapMarkersAndPaths() {
       try {
         // Clear existing markers
@@ -172,70 +191,70 @@ export function OffensiveDashboard() {
           if (marker && marker.remove) marker.remove();
         });
         markersRef.current = {};
-        
+
         // Update flight paths
         const flightPathFeatures = [];
-        
+
         // Process each drone
         console.log(`[OffensiveDashboard] Processing ${teamDrones.length} drone(s)`);
         teamDrones.forEach((drone) => {
           console.log(`[OffensiveDashboard] Processing drone ${drone.id}:`, drone);
-          
+
           if (!drone.location || !drone.location.lat || !drone.location.lng) {
             console.warn(`[OffensiveDashboard] Drone ${drone.id} has no location`);
             return;
           }
-          
+
           const lat = parseFloat(drone.location.lat);
           const lng = parseFloat(drone.location.lng);
-          
+
           // Validate GPS coordinates (latitude: -90 to 90, longitude: -180 to 180)
           if (isNaN(lat) || isNaN(lng)) {
             console.warn(`[OffensiveDashboard] Invalid coordinates for drone ${drone.id}:`, { lat, lng });
             return;
           }
-          
+
           // Convert local coordinate system to GPS if needed
           // Reference point: Chulachomklao Royal Military Academy
           let displayLat = lat;
           let displayLng = lng;
           const REFERENCE_LAT = 14.317; // Chulachomklao Royal Military Academy
           const REFERENCE_LNG = 101.217;
-          
+
           // Check if coordinates are within valid GPS range
           // Convert local coordinates to GPS coordinates within a reasonable radius on Earth
           // Maximum radius: ~5km around the reference point
           const MAX_RADIUS_KM = 5;
           const METERS_TO_DEGREES_LAT = 1 / 111000; // ~111km per degree latitude
           const METERS_TO_DEGREES_LNG = 1 / (111000 * Math.cos(REFERENCE_LAT * Math.PI / 180)); // Adjusted for longitude
-          
+
           if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
             console.warn(`[OffensiveDashboard] Coordinates out of GPS range for drone ${drone.id}:`, { lat, lng });
-            
+
             // Treat as local coordinates (meters) and convert to GPS offset
             // Normalize to reasonable range (within MAX_RADIUS_KM)
             const normalizedLat = ((Math.abs(lat) % (MAX_RADIUS_KM * 1000)) * (lat < 0 ? -1 : 1));
             const normalizedLng = ((Math.abs(lng) % (MAX_RADIUS_KM * 1000)) * (lng < 0 ? -1 : 1));
-            
+
             // Convert meters to degrees
             const offsetLat = normalizedLat * METERS_TO_DEGREES_LAT;
             const offsetLng = normalizedLng * METERS_TO_DEGREES_LNG;
-            
+
             // Add offset to reference point
             displayLat = REFERENCE_LAT + offsetLat;
             displayLng = REFERENCE_LNG + offsetLng;
-            
+
             // Ensure coordinates are within valid GPS range and reasonable bounds
-            displayLat = Math.max(REFERENCE_LAT - (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT), 
-                         Math.min(REFERENCE_LAT + (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT), displayLat));
+            displayLat = Math.max(REFERENCE_LAT - (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT),
+              Math.min(REFERENCE_LAT + (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT), displayLat));
             displayLat = Math.max(-90, Math.min(90, displayLat));
-            
-            displayLng = Math.max(REFERENCE_LNG - (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG), 
-                         Math.min(REFERENCE_LNG + (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG), displayLng));
+
+            displayLng = Math.max(REFERENCE_LNG - (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG),
+              Math.min(REFERENCE_LNG + (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG), displayLng));
             displayLng = Math.max(-180, Math.min(180, displayLng));
-            
-            console.log(`[OffensiveDashboard] Converted local coordinates to GPS:`, { 
-              original: { lat, lng }, 
+
+            console.log(`[OffensiveDashboard] Converted local coordinates to GPS:`, {
+              original: { lat, lng },
               converted: { lat: displayLat, lng: displayLng },
               offset: { lat: offsetLat, lng: offsetLng },
               radius: `${MAX_RADIUS_KM}km`
@@ -246,7 +265,7 @@ export function OffensiveDashboard() {
             const lngDiff = Math.abs(displayLng - REFERENCE_LNG);
             const maxLatDiff = MAX_RADIUS_KM * METERS_TO_DEGREES_LAT;
             const maxLngDiff = MAX_RADIUS_KM * METERS_TO_DEGREES_LNG;
-            
+
             if (latDiff > maxLatDiff || lngDiff > maxLngDiff) {
               console.warn(`[OffensiveDashboard] GPS coordinates too far from reference point, clamping to ${MAX_RADIUS_KM}km radius`);
               // Clamp to max radius
@@ -255,81 +274,81 @@ export function OffensiveDashboard() {
               displayLat = REFERENCE_LAT + latOffset;
               displayLng = REFERENCE_LNG + lngOffset;
             }
-            
+
             console.log(`[OffensiveDashboard] Using GPS coordinates (validated):`, { lat: displayLat, lng: displayLng });
           }
-          
+
           // Final validation - if still invalid, use reference point
-          if (isNaN(displayLat) || isNaN(displayLng) || 
-              displayLat < -90 || displayLat > 90 || 
-              displayLng < -180 || displayLng > 180) {
+          if (isNaN(displayLat) || isNaN(displayLng) ||
+            displayLat < -90 || displayLat > 90 ||
+            displayLng < -180 || displayLng > 180) {
             console.warn(`[OffensiveDashboard] Fallback to reference point for drone ${drone.id}`);
             displayLat = REFERENCE_LAT;
             displayLng = REFERENCE_LNG;
           }
-        
-        // Update flight path for this drone
-        if (!flightPathsRef.current[drone.id]) {
-          flightPathsRef.current[drone.id] = [];
-        }
-        
-        const currentPos = [displayLng, displayLat];
-        const path = flightPathsRef.current[drone.id];
-        
-        // Add new position if it's different from last position
-        if (path.length === 0 || 
-            path[path.length - 1][0] !== currentPos[0] || 
-            path[path.length - 1][1] !== currentPos[1]) {
-          path.push(currentPos);
-          
-          // Limit path length to last 1000 points to avoid performance issues
-          if (path.length > 1000) {
-            path.shift();
+
+          // Update flight path for this drone
+          if (!flightPathsRef.current[drone.id]) {
+            flightPathsRef.current[drone.id] = [];
           }
-        }
-        
-        // Create flight path feature if we have at least 2 points
-        if (path.length >= 2) {
-          flightPathFeatures.push({
-            type: "Feature",
-            properties: {
-              droneId: drone.id,
-              droneName: drone.name || `Drone ${drone.id}`
-            },
-            geometry: {
-              type: "LineString",
-              coordinates: path
+
+          const currentPos = [displayLng, displayLat];
+          const path = flightPathsRef.current[drone.id];
+
+          // Add new position if it's different from last position
+          if (path.length === 0 ||
+            path[path.length - 1][0] !== currentPos[0] ||
+            path[path.length - 1][1] !== currentPos[1]) {
+            path.push(currentPos);
+
+            // Limit path length to last 1000 points to avoid performance issues
+            if (path.length > 1000) {
+              path.shift();
             }
-          });
-        }
-      
-      // Create simple colored dot marker
-      const el = document.createElement("div");
-      el.className = "drone-marker";
-      el.style.width = "16px";
-      el.style.height = "16px";
-      el.style.cursor = "pointer";
-      el.style.transition = "all 0.3s ease";
-      el.style.position = "relative";
-      el.style.borderRadius = "50%";
-      el.style.border = "3px solid white";
-      el.style.boxShadow = "0 2px 4px rgba(0,0,0,0.5)";
-      el.title = `${drone.name || `Drone ${drone.id}`} - ${drone.status}`;
-      
-      // Set color based on status
-      const fillColor = drone.status === "active" ? "#2F4F2F" :  // Dark green
-                       drone.status === "standby" ? "#DAA520" :  // Goldenrod
-                       "#8B0000";  // Dark red
-      
-      el.style.backgroundColor = fillColor;
-      
-      // Add pulse animation for active drones
-      if (drone.status === "active") {
-        el.style.animation = "pulse 2s infinite";
-      }
-      
-      // Create popup content (no height - map is 2D)
-      const popupContent = `
+          }
+
+          // Create flight path feature if we have at least 2 points
+          if (path.length >= 2) {
+            flightPathFeatures.push({
+              type: "Feature",
+              properties: {
+                droneId: drone.id,
+                droneName: drone.name || `Drone ${drone.id}`
+              },
+              geometry: {
+                type: "LineString",
+                coordinates: path
+              }
+            });
+          }
+
+          // Create simple colored dot marker
+          const el = document.createElement("div");
+          el.className = "drone-marker";
+          el.style.width = "16px";
+          el.style.height = "16px";
+          el.style.cursor = "pointer";
+          el.style.transition = "all 0.3s ease";
+          el.style.position = "relative";
+          el.style.borderRadius = "50%";
+          el.style.border = "3px solid white";
+          el.style.boxShadow = "0 2px 4px rgba(0,0,0,0.5)";
+          el.title = `${drone.name || `Drone ${drone.id}`} - ${drone.status}`;
+
+          // Set color based on status
+          const fillColor = drone.status === "active" ? "#2F4F2F" :  // Dark green
+            drone.status === "standby" ? "#DAA520" :  // Goldenrod
+              "#8B0000";  // Dark red
+
+          el.style.backgroundColor = fillColor;
+
+          // Add pulse animation for active drones
+          if (drone.status === "active") {
+            el.style.animation = "pulse 2s infinite";
+          }
+
+          // Create popup content (no height - map is 2D)
+          const popupContent = `
         <div style="font-size: 12px; color: #333; min-width: 200px;">
           <strong style="color: ${colors.primary};">${drone.name || `Drone ${drone.id}`}</strong><br/>
           <strong>Status:</strong> ${drone.status}<br/>
@@ -338,37 +357,57 @@ export function OffensiveDashboard() {
           <strong>Last Update:</strong> ${drone.lastUpdate ? new Date(drone.lastUpdate).toLocaleTimeString() : "N/A"}
         </div>
       `;
-      
-      try {
-        console.log(`[OffensiveDashboard] Creating marker for drone ${drone.id} at coordinates:`, { 
-          lat: displayLat, 
-          lng: displayLng,
-          isValid: !isNaN(displayLat) && !isNaN(displayLng) && 
-                   displayLat >= -90 && displayLat <= 90 && 
-                   displayLng >= -180 && displayLng <= 180
-        });
-        
-        if (isNaN(displayLat) || isNaN(displayLng) || 
-            displayLat < -90 || displayLat > 90 || 
-            displayLng < -180 || displayLng > 180) {
-          console.error(`[OffensiveDashboard] Invalid display coordinates for drone ${drone.id}:`, { displayLat, displayLng });
-          return;
-        }
-        
-        // Verify element is properly created
-        console.log(`[OffensiveDashboard] Marker element created:`, {
-          element: el,
-          elementWidth: el.offsetWidth,
-          elementHeight: el.offsetHeight,
-          backgroundColor: window.getComputedStyle(el).backgroundColor,
-          elementStyle: window.getComputedStyle(el).display
-        });
-        
-        // Verify map is ready
-        if (!map || !map.loaded()) {
-          console.warn(`[OffensiveDashboard] Map not loaded yet, waiting...`);
-          map.once('load', () => {
-            console.log(`[OffensiveDashboard] Map loaded, creating marker now for drone ${drone.id}`);
+
+          try {
+            console.log(`[OffensiveDashboard] Creating marker for drone ${drone.id} at coordinates:`, {
+              lat: displayLat,
+              lng: displayLng,
+              isValid: !isNaN(displayLat) && !isNaN(displayLng) &&
+                displayLat >= -90 && displayLat <= 90 &&
+                displayLng >= -180 && displayLng <= 180
+            });
+
+            if (isNaN(displayLat) || isNaN(displayLng) ||
+              displayLat < -90 || displayLat > 90 ||
+              displayLng < -180 || displayLng > 180) {
+              console.error(`[OffensiveDashboard] Invalid display coordinates for drone ${drone.id}:`, { displayLat, displayLng });
+              return;
+            }
+
+            // Verify element is properly created
+            console.log(`[OffensiveDashboard] Marker element created:`, {
+              element: el,
+              elementWidth: el.offsetWidth,
+              elementHeight: el.offsetHeight,
+              backgroundColor: window.getComputedStyle(el).backgroundColor,
+              elementStyle: window.getComputedStyle(el).display
+            });
+
+            // Verify map is ready
+            if (!map || !map.loaded()) {
+              console.warn(`[OffensiveDashboard] Map not loaded yet, waiting...`);
+              map.once('load', () => {
+                console.log(`[OffensiveDashboard] Map loaded, creating marker now for drone ${drone.id}`);
+                const marker = new mapboxgl.Marker({
+                  element: el,
+                  anchor: 'center'
+                })
+                  .setLngLat([displayLng, displayLat])
+                  .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(popupContent))
+                  .addTo(map);
+
+                el.addEventListener("click", (e) => {
+                  e.stopPropagation();
+                  console.log(`[OffensiveDashboard] Marker clicked for drone ${drone.id}`);
+                  setSelectedDrone(drone);
+                });
+
+                markersRef.current[drone.id] = marker;
+                console.log(`[OffensiveDashboard] ✅ Marker created after map load for drone ${drone.id}`);
+              });
+              return;
+            }
+
             const marker = new mapboxgl.Marker({
               element: el,
               anchor: 'center'
@@ -376,56 +415,36 @@ export function OffensiveDashboard() {
               .setLngLat([displayLng, displayLat])
               .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(popupContent))
               .addTo(map);
-            
+
+            console.log(`[OffensiveDashboard] ✅ Successfully created marker for drone ${drone.id} at:`, {
+              lat: displayLat,
+              lng: displayLng,
+              marker: marker,
+              markerElement: marker.getElement(),
+              markerLngLat: marker.getLngLat()
+            });
+
+            // Add click handler
             el.addEventListener("click", (e) => {
               e.stopPropagation();
               console.log(`[OffensiveDashboard] Marker clicked for drone ${drone.id}`);
               setSelectedDrone(drone);
             });
-            
+
             markersRef.current[drone.id] = marker;
-            console.log(`[OffensiveDashboard] ✅ Marker created after map load for drone ${drone.id}`);
-          });
-          return;
-        }
-        
-        const marker = new mapboxgl.Marker({
-          element: el,
-          anchor: 'center'
-        })
-          .setLngLat([displayLng, displayLat])
-          .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(popupContent))
-          .addTo(map);
-        
-        console.log(`[OffensiveDashboard] ✅ Successfully created marker for drone ${drone.id} at:`, { 
-          lat: displayLat, 
-          lng: displayLng,
-          marker: marker,
-          markerElement: marker.getElement(),
-          markerLngLat: marker.getLngLat()
-        });
-        
-        // Add click handler
-        el.addEventListener("click", (e) => {
-          e.stopPropagation();
-          console.log(`[OffensiveDashboard] Marker clicked for drone ${drone.id}`);
-          setSelectedDrone(drone);
-        });
-        
-        markersRef.current[drone.id] = marker;
-        console.log(`[OffensiveDashboard] Marker stored in markersRef for drone ${drone.id}, total markers:`, Object.keys(markersRef.current).length);
-      } catch (error) {
-        console.error(`[OffensiveDashboard] ❌ Error creating marker for drone ${drone.id}:`, error);
-        console.error(`[OffensiveDashboard] Error details:`, { 
-          drone, 
-          displayLat, 
-          displayLng, 
-          errorMessage: error.message,
-          errorStack: error.stack
-        });
-      }
-      }); // End of teamDrones.forEach
-      
+            console.log(`[OffensiveDashboard] Marker stored in markersRef for drone ${drone.id}, total markers:`, Object.keys(markersRef.current).length);
+          } catch (error) {
+            console.error(`[OffensiveDashboard] ❌ Error creating marker for drone ${drone.id}:`, error);
+            console.error(`[OffensiveDashboard] Error details:`, {
+              drone,
+              displayLat,
+              displayLng,
+              errorMessage: error.message,
+              errorStack: error.stack
+            });
+          }
+        }); // End of teamDrones.forEach
+
         // Update flight paths source
         const flightPathSource = map.getSource("flight-paths");
         if (flightPathSource) {
@@ -434,7 +453,7 @@ export function OffensiveDashboard() {
             features: flightPathFeatures
           });
         }
-        
+
         // Don't auto-fit bounds - keep default center at Chulachomklao Royal Military Academy
         // Users can use "Center on All Drones" button if they want to see all drones
       } catch (error) {
@@ -443,7 +462,7 @@ export function OffensiveDashboard() {
       }
     } // End of updateMapMarkersAndPaths function
   }, [teamDrones, colors]);
-  
+
   // Fetch team drones on mount and periodically
   useEffect(() => {
     fetchTeamDrones();
@@ -458,22 +477,22 @@ export function OffensiveDashboard() {
         console.warn("[OffensiveDashboard] Cannot center: map or drone location not available");
         return;
       }
-      
+
       let lat = parseFloat(drone.location.lat);
       let lng = parseFloat(drone.location.lng);
-      
+
       if (isNaN(lat) || isNaN(lng)) {
         console.warn("[OffensiveDashboard] Invalid coordinates:", { lat, lng });
         return;
       }
-      
+
       // Convert coordinates if needed (same logic as marker creation)
       const REFERENCE_LAT = 14.317;
       const REFERENCE_LNG = 101.217;
       const MAX_RADIUS_KM = 5;
       const METERS_TO_DEGREES_LAT = 1 / 111000;
       const METERS_TO_DEGREES_LNG = 1 / (111000 * Math.cos(REFERENCE_LAT * Math.PI / 180));
-      
+
       if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
         console.log("[OffensiveDashboard] Converting coordinates for centering:", { lat, lng });
         const normalizedLat = ((Math.abs(lat) % (MAX_RADIUS_KM * 1000)) * (lat < 0 ? -1 : 1));
@@ -482,11 +501,11 @@ export function OffensiveDashboard() {
         const offsetLng = normalizedLng * METERS_TO_DEGREES_LNG;
         lat = REFERENCE_LAT + offsetLat;
         lng = REFERENCE_LNG + offsetLng;
-        lat = Math.max(REFERENCE_LAT - (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT), 
-              Math.min(REFERENCE_LAT + (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT), lat));
+        lat = Math.max(REFERENCE_LAT - (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT),
+          Math.min(REFERENCE_LAT + (MAX_RADIUS_KM * METERS_TO_DEGREES_LAT), lat));
         lat = Math.max(-90, Math.min(90, lat));
-        lng = Math.max(REFERENCE_LNG - (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG), 
-              Math.min(REFERENCE_LNG + (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG), lng));
+        lng = Math.max(REFERENCE_LNG - (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG),
+          Math.min(REFERENCE_LNG + (MAX_RADIUS_KM * METERS_TO_DEGREES_LNG), lng));
         lng = Math.max(-180, Math.min(180, lng));
       } else {
         // Clamp to max radius even if within GPS range
@@ -494,7 +513,7 @@ export function OffensiveDashboard() {
         const lngDiff = Math.abs(lng - REFERENCE_LNG);
         const maxLatDiff = MAX_RADIUS_KM * METERS_TO_DEGREES_LAT;
         const maxLngDiff = MAX_RADIUS_KM * METERS_TO_DEGREES_LNG;
-        
+
         if (latDiff > maxLatDiff || lngDiff > maxLngDiff) {
           const latOffset = Math.sign(lat - REFERENCE_LAT) * Math.min(latDiff, maxLatDiff);
           const lngOffset = Math.sign(lng - REFERENCE_LNG) * Math.min(lngDiff, maxLngDiff);
@@ -502,15 +521,15 @@ export function OffensiveDashboard() {
           lng = REFERENCE_LNG + lngOffset;
         }
       }
-      
+
       console.log("[OffensiveDashboard] Centering map on drone:", { lat, lng });
-      
+
       mapInstanceRef.current.flyTo({
         center: [lng, lat],
         zoom: 16,
         duration: 1500
       });
-      
+
       // Open popup after animation
       setTimeout(() => {
         if (markersRef.current[drone.id]) {
@@ -526,24 +545,24 @@ export function OffensiveDashboard() {
   const centerOnAllDrones = () => {
     try {
       if (!mapInstanceRef.current || teamDrones.length === 0) return;
-      
+
       const bounds = new mapboxgl.LngLatBounds();
       let hasValidLocation = false;
-      
+
       teamDrones.forEach(drone => {
         if (drone.location && drone.location.lat && drone.location.lng) {
           const lat = parseFloat(drone.location.lat);
           const lng = parseFloat(drone.location.lng);
           // Validate GPS coordinates
-          if (!isNaN(lat) && !isNaN(lng) && 
-              lat >= -90 && lat <= 90 && 
-              lng >= -180 && lng <= 180) {
+          if (!isNaN(lat) && !isNaN(lng) &&
+            lat >= -90 && lat <= 90 &&
+            lng >= -180 && lng <= 180) {
             bounds.extend([lng, lat]);
             hasValidLocation = true;
           }
         }
       });
-      
+
       if (hasValidLocation && !bounds.isEmpty()) {
         mapInstanceRef.current.flyTo({
           bounds: bounds,
@@ -559,9 +578,9 @@ export function OffensiveDashboard() {
   };
 
   return (
-    <div style={{ 
-      background: colors.bgDark, 
-      minHeight: "100vh", 
+    <div style={{
+      background: colors.bgDark,
+      minHeight: "100vh",
       padding: "20px",
       position: "relative",
       zIndex: 1
@@ -790,10 +809,10 @@ export function OffensiveDashboard() {
           50% { transform: scale(1.1); opacity: 0.8; }
         }
       `}</style>
-      
+
       <div className="offensive-dashboard">
         <h1>🚁 Offensive Operations Dashboard {connectionStatus === "connected" && <span style={{ fontSize: 12, color: colors.success }}>● Live</span>}</h1>
-        
+
         <div className="stats-grid">
           <div className="stat-card">
             <h3>🚁 Total Units</h3>
@@ -884,7 +903,7 @@ export function OffensiveDashboard() {
                     <strong style={{ color: colors.accent }}>Name:</strong> {selectedDrone.name || `Drone ${selectedDrone.id}`}
                   </div>
                   <div style={{ marginBottom: "12px" }}>
-                    <strong style={{ color: colors.accent }}>Status:</strong> 
+                    <strong style={{ color: colors.accent }}>Status:</strong>
                     <span className={`drone-status ${selectedDrone.status}`} style={{ marginLeft: "8px" }}>
                       {selectedDrone.status}
                     </span>
@@ -893,7 +912,7 @@ export function OffensiveDashboard() {
                     <div style={{ marginBottom: "16px", padding: "12px", background: colors.bgDark, borderRadius: "4px", border: `1px solid ${colors.border}` }}>
                       <strong style={{ color: colors.accent, fontSize: "13px", textTransform: "uppercase" }}>📍 Location Coordinates:</strong>
                       <div style={{ color: colors.text, marginTop: "6px", fontFamily: "'Orbitron', sans-serif" }}>
-                        Latitude: <strong>{parseFloat(selectedDrone.location.lat).toFixed(6)}</strong><br/>
+                        Latitude: <strong>{parseFloat(selectedDrone.location.lat).toFixed(6)}</strong><br />
                         Longitude: <strong>{parseFloat(selectedDrone.location.lng).toFixed(6)}</strong>
                       </div>
                     </div>
@@ -920,7 +939,7 @@ export function OffensiveDashboard() {
               <h2>🔌 Connection Status</h2>
               <div style={{ color: colors.text, fontSize: "13px" }}>
                 <div style={{ marginBottom: "8px" }}>
-                  <strong>Server:</strong> 
+                  <strong>Server:</strong>
                   <span style={{ color: connectionStatus === "connected" ? colors.success : colors.danger, marginLeft: "8px" }}>
                     {connectionStatus === "connected" ? "● Connected" : "○ Disconnected"}
                   </span>

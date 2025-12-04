@@ -12,6 +12,7 @@ import {
   Legend,
   ResponsiveContainer
 } from "recharts";
+import { TacticalCard, GaugeWidget, RadarDisplay, colorsTactical } from "../components/tactical";
 
 export function DefensiveDashboard() {
   const [droneData, setDroneData] = useState(null);
@@ -33,17 +34,17 @@ export function DefensiveDashboard() {
   const mapInstanceRef = useRef(null);
   const markersRef = useRef({ cameras: [], drones: [] });
   const socketRef = useRef(null);
-  
+
   const MAPBOX_TOKEN = "pk.eyJ1IjoiY2hhdGNoYWxlcm0iLCJhIjoiY21nZnpiYzU3MGRzdTJrczlkd3RxamN4YyJ9.k288gnCNLdLgczawiB79gQ";
-  
+
   // Calculate distance between two points (Haversine formula)
   const calculateDistance = (lat1, lng1, lat2, lng2) => {
     const R = 6371; // Earth's radius in km
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLng = (lng2 - lng1) * Math.PI / 180;
     const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return (R * c).toFixed(2); // Distance in km
   };
@@ -82,12 +83,12 @@ export function DefensiveDashboard() {
       console.log("[DefensiveDashboard] Fetching detected images from /api/detected/images");
       const response = await fetch("/api/detected/images");
       console.log("[DefensiveDashboard] Response status:", response.status, response.statusText);
-      
+
       if (response.ok) {
         const data = await response.json();
-        console.log("[DefensiveDashboard] Received data:", { 
-          imageCount: data.images?.length || 0, 
-          firstFew: data.images?.slice(0, 3) 
+        console.log("[DefensiveDashboard] Received data:", {
+          imageCount: data.images?.length || 0,
+          firstFew: data.images?.slice(0, 3)
         });
         const images = data.images || [];
         setDetectedImages(images);
@@ -96,7 +97,7 @@ export function DefensiveDashboard() {
         if (images.length > 0) {
           setLatestDetectedImage(images[0]);
           console.log("[DefensiveDashboard] Latest detected image set to:", images[0]);
-          
+
           // Fetch CSV data for all images
           images.forEach(imageFilename => {
             fetchCSVForImage(imageFilename);
@@ -127,30 +128,46 @@ export function DefensiveDashboard() {
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       reconnectionAttempts: 5,
-      path: "/socket.io/"
+      timeout: 20000,
+      path: "/socket.io/",
     });
 
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("Connected to server");
+      console.log("[DefensiveDashboard] Connected to server, ID:", socket.id);
       setConnectionStatus("connected");
     });
 
-    socket.on("disconnect", () => {
-      console.log("Disconnected from server");
+    socket.on("disconnect", (reason) => {
+      console.log("[DefensiveDashboard] Disconnected from server, reason:", reason);
       setConnectionStatus("disconnected");
     });
 
     socket.on("connect_error", (error) => {
-      console.error("Connection error:", error);
+      console.error("[DefensiveDashboard] Connection error:", error.message);
+      setConnectionStatus("error");
+    });
+
+    socket.on("reconnect_attempt", (attemptNumber) => {
+      console.log("[DefensiveDashboard] Reconnection attempt:", attemptNumber);
+    });
+
+    socket.on("reconnect", (attemptNumber) => {
+      console.log("[DefensiveDashboard] Reconnected after", attemptNumber, "attempts");
+      setConnectionStatus("connected");
+    });
+
+    socket.on("reconnect_failed", () => {
+      console.error("[DefensiveDashboard] Reconnection failed");
       setConnectionStatus("error");
     });
 
     // Listen for drone data
     socket.on("drone-data", (data) => {
-      console.log("Received drone data:", data);
+      console.log("[DefensiveDashboard] Received drone data:", data);
       setDroneData(data);
 
       // Update drone list from CSV data
@@ -161,35 +178,44 @@ export function DefensiveDashboard() {
       }
     });
 
+    // Listen for new detected images
+    socket.on("new-detected-image", (data) => {
+      console.log("[DefensiveDashboard] New detected image:", data);
+      fetchDetectedImages(); // Refresh the image list
+    });
+
     // Cleanup on unmount
     return () => {
-      socket.disconnect();
+      if (socket) {
+        socket.disconnect();
+        socketRef.current = null;
+      }
     };
   }, []);
 
   // Initialize Mapbox map
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
-    
+
     mapboxgl.accessToken = MAPBOX_TOKEN;
-    
+
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: "mapbox://styles/mapbox/satellite-streets-v12", // Satellite/realistic style
       center: [101.217, 14.317], // Default center (Chulachomklao Royal Military Academy, Nakhon Nayok)
       zoom: 14 // Zoom to show area around the academy
     });
-    
+
     mapInstanceRef.current = map;
-    
+
     map.on("load", () => {
       console.log("[DefensiveDashboard] Map loaded");
     });
-    
+
     map.on("error", (e) => {
       console.error("[DefensiveDashboard] Map error:", e);
     });
-    
+
     // Handle map click for camera positioning
     const handleMapClick = (e) => {
       if (isLockingCamera) {
@@ -198,9 +224,9 @@ export function DefensiveDashboard() {
         console.log("[DefensiveDashboard] Camera position selected:", { lat, lng });
       }
     };
-    
+
     map.on("click", handleMapClick);
-    
+
     // Change cursor when in camera locking mode
     map.on("mousemove", () => {
       if (isLockingCamera) {
@@ -209,7 +235,7 @@ export function DefensiveDashboard() {
         map.getCanvas().style.cursor = "";
       }
     });
-    
+
     return () => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.off("click", handleMapClick);
@@ -218,7 +244,7 @@ export function DefensiveDashboard() {
       }
     };
   }, [MAPBOX_TOKEN, isLockingCamera]);
-  
+
   // Fetch camera positions
   const fetchCameraPositions = async () => {
     try {
@@ -236,22 +262,22 @@ export function DefensiveDashboard() {
       setCameraPositions([{ lat: 13.7, lng: 100.5, name: "Camera 1" }]);
     }
   };
-  
+
   // Update map markers when camera positions or CSV data changes
   useEffect(() => {
     if (!mapInstanceRef.current) return;
-    
+
     const map = mapInstanceRef.current;
-    
+
     // Clear existing markers
     markersRef.current.cameras.forEach(marker => marker.remove());
     markersRef.current.drones.forEach(marker => marker.remove());
     markersRef.current.cameras = [];
     markersRef.current.drones = [];
-    
+
     // Add camera markers (use selectedCameraPosition if set, otherwise use cameraPositions)
     const activeCameraPos = selectedCameraPosition || (cameraPositions.length > 0 ? cameraPositions[0] : null);
-    
+
     if (activeCameraPos && activeCameraPos.lat && activeCameraPos.lng) {
       const el = document.createElement("div");
       el.className = "camera-marker";
@@ -263,34 +289,34 @@ export function DefensiveDashboard() {
       el.style.cursor = "pointer";
       el.style.boxShadow = "0 2px 4px rgba(0,0,0,0.3)";
       el.title = activeCameraPos.name || "Camera Position";
-      
-      const popupText = activeCameraPos.name 
+
+      const popupText = activeCameraPos.name
         ? `${activeCameraPos.name}\nLat: ${activeCameraPos.lat.toFixed(6)}\nLng: ${activeCameraPos.lng.toFixed(6)}`
         : `Camera Position\nLat: ${activeCameraPos.lat.toFixed(6)}\nLng: ${activeCameraPos.lng.toFixed(6)}`;
-      
+
       const marker = new mapboxgl.Marker(el)
         .setLngLat([activeCameraPos.lng, activeCameraPos.lat])
         .setPopup(new mapboxgl.Popup().setText(popupText))
         .addTo(map);
-      
+
       markersRef.current.cameras.push(marker);
     }
-    
+
     // Add drone markers from CSV data
-    
+
     Object.entries(imageCSVData).forEach(([imageFilename, csvData]) => {
       // Support both 'latitude'/'longitude' and 'lat'/'lng' formats
       const lat = csvData?.latitude || csvData?.lat;
       const lng = csvData?.longitude || csvData?.lng;
-      
+
       if (csvData && lat && lng) {
         let latNum = parseFloat(lat);
         let lngNum = parseFloat(lng);
-        
+
         // Convert local coordinates to GPS if needed (same as OffensiveDashboard)
         const REFERENCE_LAT = 14.317; // Chulachomklao Royal Military Academy
         const REFERENCE_LNG = 101.217;
-        
+
         if (latNum < -90 || latNum > 90 || lngNum < -180 || lngNum > 180) {
           console.warn(`[DefensiveDashboard] Converting local coordinates:`, { lat: latNum, lng: lngNum });
           const OFFSET_SCALE = 0.00001;
@@ -302,7 +328,7 @@ export function DefensiveDashboard() {
           latNum = Math.max(-90, Math.min(90, latNum));
           lngNum = Math.max(-180, Math.min(180, lngNum));
         }
-        
+
         if (!isNaN(latNum) && !isNaN(lngNum)) {
           const el = document.createElement("div");
           el.className = "drone-marker";
@@ -314,14 +340,14 @@ export function DefensiveDashboard() {
           el.style.cursor = "pointer";
           el.style.boxShadow = "0 2px 4px rgba(0,0,0,0.3)";
           el.title = `Drone: ${imageFilename}`;
-          
+
           // Calculate distance from camera if available
           let distanceText = "";
           if (activeCameraPos && activeCameraPos.lat && activeCameraPos.lng) {
             const distance = calculateDistance(activeCameraPos.lat, activeCameraPos.lng, latNum, lngNum);
             distanceText = `<br/><strong>ระยะห่างจากกล้อง: ${distance} km</strong>`;
           }
-          
+
           const popupContent = `
             <div style="font-size: 12px;">
               <strong>Drone Detection</strong><br/>
@@ -330,12 +356,12 @@ export function DefensiveDashboard() {
               ${Object.entries(csvData).filter(([k]) => k !== 'latitude' && k !== 'longitude' && k !== 'lat' && k !== 'lng' && k !== 'image_name').map(([k, v]) => `${k}: ${v}`).join('<br/>')}
             </div>
           `;
-          
+
           const marker = new mapboxgl.Marker(el)
             .setLngLat([lngNum, latNum])
             .setPopup(new mapboxgl.Popup().setHTML(popupContent))
             .addTo(map);
-          
+
           // Add click handler to show drone card
           el.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -344,25 +370,25 @@ export function DefensiveDashboard() {
               csvData,
               lat: latNum,
               lng: lngNum,
-              distance: activeCameraPos && activeCameraPos.lat && activeCameraPos.lng 
+              distance: activeCameraPos && activeCameraPos.lat && activeCameraPos.lng
                 ? calculateDistance(activeCameraPos.lat, activeCameraPos.lng, latNum, lngNum)
                 : null
             });
           });
-          
+
           markersRef.current.drones.push(marker);
         }
       }
     });
-    
+
     // Fit map to show all markers
     if (markersRef.current.cameras.length > 0 || markersRef.current.drones.length > 0) {
       const bounds = new mapboxgl.LngLatBounds();
-      
+
       if (activeCameraPos && activeCameraPos.lat && activeCameraPos.lng) {
         bounds.extend([activeCameraPos.lng, activeCameraPos.lat]);
       }
-      
+
       Object.values(imageCSVData).forEach(csvData => {
         const lat = csvData?.latitude || csvData?.lat;
         const lng = csvData?.longitude || csvData?.lng;
@@ -374,13 +400,13 @@ export function DefensiveDashboard() {
           }
         }
       });
-      
+
       if (!bounds.isEmpty()) {
         map.fitBounds(bounds, { padding: 50, maxZoom: 15 });
       }
     }
   }, [cameraPositions, imageCSVData, selectedCameraPosition]);
-  
+
   // Fetch latency and duration data
   const fetchLatencyDuration = async () => {
     try {
@@ -450,7 +476,7 @@ export function DefensiveDashboard() {
     fetchAttackDefense();
     fetchWeather();
     fetchPeopleCount();
-    
+
     // Refresh detected images every 5 seconds
     const interval = setInterval(() => {
       fetchDetectedImages();
@@ -483,9 +509,9 @@ export function DefensiveDashboard() {
   };
 
   return (
-    <div style={{ 
-      background: colors.bgDark, 
-      minHeight: "100vh", 
+    <div style={{
+      background: colors.bgDark,
+      minHeight: "100vh",
       padding: "20px",
       position: "relative",
       zIndex: 1
@@ -681,7 +707,7 @@ export function DefensiveDashboard() {
       `}</style>
       <div className="def-root">
         <h1>🛡️ Defensive Command Dashboard</h1>
-        
+
         {/* Stats Cards */}
         <div className="stats-grid">
           <div className="stat-card">
@@ -741,10 +767,10 @@ export function DefensiveDashboard() {
               </button>
             </h2>
             {selectedCameraPosition && (
-              <div style={{ 
-                marginBottom: "8px", 
-                padding: "10px", 
-                background: colors.bgMedium, 
+              <div style={{
+                marginBottom: "8px",
+                padding: "10px",
+                background: colors.bgMedium,
                 border: `1px solid ${colors.success}`,
                 borderRadius: "4px",
                 fontSize: "12px",
@@ -755,10 +781,10 @@ export function DefensiveDashboard() {
               </div>
             )}
             {isLockingCamera && (
-              <div style={{ 
-                marginBottom: "8px", 
-                padding: "10px", 
-                background: colors.bgMedium, 
+              <div style={{
+                marginBottom: "8px",
+                padding: "10px",
+                background: colors.bgMedium,
                 border: `1px solid ${colors.warning}`,
                 borderRadius: "4px",
                 fontSize: "12px",
@@ -810,53 +836,53 @@ export function DefensiveDashboard() {
                 <ResponsiveContainer width="100%" height={250}>
                   <LineChart data={latencyDurationData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={colors.border} opacity={0.3} />
-                    <XAxis 
-                      dataKey="time" 
+                    <XAxis
+                      dataKey="time"
                       stroke={colors.textSecondary}
                       tick={{ fill: colors.textSecondary, fontSize: 10 }}
                       angle={-45}
                       textAnchor="end"
                       height={70}
                     />
-                    <YAxis 
+                    <YAxis
                       yAxisId="left"
                       stroke={colors.accent}
                       tick={{ fill: colors.accent, fontSize: 10 }}
                       label={{ value: "Latency (ms)", angle: -90, position: "insideLeft", fill: colors.accent, style: { fontSize: 11 } }}
                     />
-                    <YAxis 
+                    <YAxis
                       yAxisId="right"
                       orientation="right"
                       stroke={colors.warning}
                       tick={{ fill: colors.warning, fontSize: 10 }}
                       label={{ value: "Duration (ms)", angle: 90, position: "insideRight", fill: colors.warning, style: { fontSize: 11 } }}
                     />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: colors.bgMedium, 
-                        border: `1px solid ${colors.border}`, 
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: colors.bgMedium,
+                        border: `1px solid ${colors.border}`,
                         color: colors.text,
                         borderRadius: "4px"
                       }}
                     />
-                    <Legend 
+                    <Legend
                       wrapperStyle={{ color: colors.text, fontSize: "12px" }}
                     />
-                    <Line 
+                    <Line
                       yAxisId="left"
-                      type="monotone" 
-                      dataKey="latency" 
-                      stroke={colors.accent} 
+                      type="monotone"
+                      dataKey="latency"
+                      stroke={colors.accent}
                       strokeWidth={2}
                       dot={{ r: 3, fill: colors.accent }}
                       activeDot={{ r: 5 }}
                       name="Latency (ms)"
                     />
-                    <Line 
+                    <Line
                       yAxisId="right"
-                      type="monotone" 
-                      dataKey="duration" 
-                      stroke={colors.warning} 
+                      type="monotone"
+                      dataKey="duration"
+                      stroke={colors.warning}
                       strokeWidth={2}
                       dot={{ r: 3, fill: colors.warning }}
                       activeDot={{ r: 5 }}
@@ -922,11 +948,11 @@ export function DefensiveDashboard() {
             </div>
             <div className="info-card">
               <h3>👥 Personnel in Operational Zone</h3>
-              <div style={{ 
-                fontSize: "48px", 
-                fontWeight: "700", 
-                color: colors.warning, 
-                textAlign: "center", 
+              <div style={{
+                fontSize: "48px",
+                fontWeight: "700",
+                color: colors.warning,
+                textAlign: "center",
                 padding: "20px",
                 fontFamily: "'Orbitron', sans-serif",
                 textShadow: `0 2px 8px rgba(218, 165, 32, 0.5)`
@@ -950,7 +976,7 @@ export function DefensiveDashboard() {
                   const csvData = imageCSVData[imageFilename];
                   const hasCSV = csvData !== undefined && csvData !== null;
                   const isLoading = csvData === undefined;
-                  
+
                   // Get lat/lng for distance calculation
                   const lat = csvData?.latitude || csvData?.lat;
                   const lng = csvData?.longitude || csvData?.lng;
@@ -960,13 +986,13 @@ export function DefensiveDashboard() {
                   const distance = (latNum && lngNum && activeCameraPos && activeCameraPos.lat && activeCameraPos.lng)
                     ? calculateDistance(activeCameraPos.lat, activeCameraPos.lng, latNum, lngNum)
                     : null;
-                  
+
                   return (
-                    <article 
-                      key={imageFilename} 
-                      className="drone-item" 
-                      tabIndex={0} 
-                      role="region" 
+                    <article
+                      key={imageFilename}
+                      className="drone-item"
+                      tabIndex={0}
+                      role="region"
                       aria-labelledby={`title-drone-${index}`}
                       onClick={() => {
                         if (hasCSV && latNum && lngNum) {
@@ -982,10 +1008,10 @@ export function DefensiveDashboard() {
                       style={{ cursor: hasCSV && latNum && lngNum ? "pointer" : "default" }}
                     >
                       <div className="drone-info" id={`title-drone-${index}`}>
-                        <div style={{ 
-                          fontSize: "12px", 
-                          color: colors.accent, 
-                          marginBottom: "8px", 
+                        <div style={{
+                          fontSize: "12px",
+                          color: colors.accent,
+                          marginBottom: "8px",
                           fontWeight: "700",
                           fontFamily: "'Orbitron', sans-serif",
                           textTransform: "uppercase",
@@ -1038,26 +1064,26 @@ export function DefensiveDashboard() {
                     </article>
                   );
                 })
-                ) : (
-                  <div style={{ padding: "30px", textAlign: "center", color: colors.textSecondary, lineHeight: "1.6" }}>
-                    {connectionStatus !== "connected"
-                      ? "Not connected to server"
-                      : detectedImagesError
-                        ? detectedImagesError
-                        : "No threats detected"}
-                    <div style={{ fontSize: "11px", marginTop: "8px" }}>
-                      System monitoring active
-                    </div>
+              ) : (
+                <div style={{ padding: "30px", textAlign: "center", color: colors.textSecondary, lineHeight: "1.6" }}>
+                  {connectionStatus !== "connected"
+                    ? "Not connected to server"
+                    : detectedImagesError
+                      ? detectedImagesError
+                      : "No threats detected"}
+                  <div style={{ fontSize: "11px", marginTop: "8px" }}>
+                    System monitoring active
                   </div>
-                )}
+                </div>
+              )}
             </div>
           </section>
         </div>
       </div>
-      
+
       {/* Drone Detail Card Modal */}
       {selectedDrone && (
-        <div 
+        <div
           style={{
             position: "fixed",
             top: 0,
@@ -1073,7 +1099,7 @@ export function DefensiveDashboard() {
           }}
           onClick={() => setSelectedDrone(null)}
         >
-            <div 
+          <div
             style={{
               background: `linear-gradient(135deg, ${colors.bgMedium} 0%, ${colors.bgLight} 100%)`,
               borderRadius: "4px",
@@ -1110,10 +1136,10 @@ export function DefensiveDashboard() {
             >
               ×
             </button>
-            
-            <h2 style={{ 
-              color: colors.text, 
-              marginBottom: "20px", 
+
+            <h2 style={{
+              color: colors.text,
+              marginBottom: "20px",
               marginTop: "0",
               fontFamily: "'Orbitron', sans-serif",
               textTransform: "uppercase",
@@ -1123,23 +1149,23 @@ export function DefensiveDashboard() {
             }}>
               🎯 Threat Analysis Report
             </h2>
-            
+
             <div style={{ color: colors.text, fontSize: "14px", lineHeight: "1.8" }}>
               <div style={{ marginBottom: "16px", padding: "12px", background: colors.bgDark, borderRadius: "4px", border: `1px solid ${colors.border}` }}>
-                <strong style={{ color: colors.accent, fontSize: "13px", textTransform: "uppercase" }}>Threat ID:</strong> 
+                <strong style={{ color: colors.accent, fontSize: "13px", textTransform: "uppercase" }}>Threat ID:</strong>
                 <div style={{ color: colors.text, marginTop: "4px", fontFamily: "'Orbitron', sans-serif" }}>{selectedDrone.imageFilename}</div>
               </div>
-              
+
               {selectedDrone.lat && selectedDrone.lng && (
                 <div style={{ marginBottom: "16px", padding: "12px", background: colors.bgDark, borderRadius: "4px", border: `1px solid ${colors.border}` }}>
                   <strong style={{ color: colors.accent, fontSize: "13px", textTransform: "uppercase" }}>📍 Location Coordinates:</strong>
                   <div style={{ color: colors.text, marginTop: "6px", fontFamily: "'Orbitron', sans-serif" }}>
-                    Latitude: <strong>{selectedDrone.lat.toFixed(6)}</strong><br/>
+                    Latitude: <strong>{selectedDrone.lat.toFixed(6)}</strong><br />
                     Longitude: <strong>{selectedDrone.lng.toFixed(6)}</strong>
                   </div>
                 </div>
               )}
-              
+
               {selectedDrone.distance && (
                 <div style={{ marginBottom: "16px", padding: "12px", background: colors.bgDark, borderRadius: "4px", border: `1px solid ${colors.warning}` }}>
                   <strong style={{ color: colors.warning, fontSize: "13px", textTransform: "uppercase" }}>📏 Distance from Command Center:</strong>
@@ -1148,7 +1174,7 @@ export function DefensiveDashboard() {
                   </div>
                 </div>
               )}
-              
+
               {selectedDrone.csvData && (
                 <div style={{ marginTop: "20px", paddingTop: "20px", borderTop: `2px solid ${colors.border}` }}>
                   <strong style={{ color: colors.accent, fontSize: "14px", textTransform: "uppercase", letterSpacing: "1px" }}>📊 Detailed Threat Data:</strong>
@@ -1156,10 +1182,10 @@ export function DefensiveDashboard() {
                     {Object.entries(selectedDrone.csvData)
                       .filter(([key]) => key !== 'latitude' && key !== 'longitude' && key !== 'image_name')
                       .map(([key, value]) => (
-                        <div key={key} style={{ 
-                          marginTop: "8px", 
-                          padding: "8px", 
-                          background: colors.bgDark, 
+                        <div key={key} style={{
+                          marginTop: "8px",
+                          padding: "8px",
+                          background: colors.bgDark,
                           borderRadius: "4px",
                           border: `1px solid ${colors.border}`
                         }}>

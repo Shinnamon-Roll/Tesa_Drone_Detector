@@ -8,39 +8,124 @@ import path from "path";
 import { fileURLToPath } from "url";
 import mqtt from "mqtt";
 import multer from "multer";
+import helmet from "helmet";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
+import { body, param, validationResult } from "express-validator";
+import dotenv from "dotenv";
+import debounce from "lodash.debounce";
+
+// Load environment variables
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ========================================
+// Configuration
+// ========================================
+const CONFIG = {
+  PORT: process.env.PORT ? Number(process.env.PORT) : 3000,
+  DATA_DIR: process.env.DATA_DIR || path.join(__dirname, "../../../dataForWeb"),
+  MQTT_BROKER: process.env.MQTT_BROKER || "mqtt://localhost:1883",
+  MQTT_TOPIC: process.env.MQTT_TOPIC || "tesa/drones/offensive",
+  NODE_ENV: process.env.NODE_ENV || "development",
+  ENABLE_MQTT: process.env.ENABLE_MQTT !== "false",
+  CORS_ORIGIN: process.env.CORS_ORIGIN || "*",
+};
+
+const DATA_DIR = CONFIG.DATA_DIR;
+const CSV_DIR = path.join(DATA_DIR, "csv");
+const IMAGE_DIR = path.join(DATA_DIR, "image");
+const DETECTED_DIR = path.join(DATA_DIR, "detected");
+const port = CONFIG.PORT;
+
+// Log configuration on startup
+console.log(`[server] Environment: ${CONFIG.NODE_ENV}`);
+console.log(`[server] Port: ${port}`);
+console.log(`[server] DATA_DIR: ${DATA_DIR}`);
+console.log(`[server] DETECTED_DIR: ${DETECTED_DIR}`);
+console.log(`[server] MQTT Enabled: ${CONFIG.ENABLE_MQTT}`);
+
+// ========================================
+// Express App Setup
+// ========================================
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+    origin: CONFIG.CORS_ORIGIN,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
 });
 
-const port = process.env.PORT ? Number(process.env.PORT) : 3000;
-
-// Path to dataForWeb directory (adjust this path as needed)
-// Assuming dataForWeb is at the same level as Tesa_Drone_Detector
-// __dirname is server/src, so ../../.. goes to parent of Tesa_Drone_Detector
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "../../../dataForWeb");
-const CSV_DIR = path.join(DATA_DIR, "csv");
-const IMAGE_DIR = path.join(DATA_DIR, "image");
-const DETECTED_DIR = path.join(DATA_DIR, "detected");
-
-// Log paths on startup for debugging
-console.log(`[server] DATA_DIR: ${DATA_DIR}`);
-console.log(`[server] DETECTED_DIR: ${DETECTED_DIR}`);
+// ========================================
+// Security & Performance Middleware
+// ========================================
 
 // Trust proxy for nginx reverse proxy
-app.set('trust proxy', true);
+app.set("trust proxy", true);
 
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Allow Mapbox resources
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+// Compression
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.headers["x-no-compression"]) {
+        return false;
+      }
+      return compression.filter(req, res);
+    },
+    level: 6,
+  })
+);
+
+// CORS
+app.use(
+  cors({
+    origin: CONFIG.CORS_ORIGIN,
+    credentials: true,
+  })
+);
+
+// Body parsing
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // limit uploads to 10 per minute
+  message: "Too many upload requests, please slow down.",
+});
+
+// Apply rate limiting to API routes
+app.use("/api/", apiLimiter);
+
+// Validation helper
+const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+  next();
+};
 
 // Configure multer for image upload (from Pi 5)
 const storage = multer.diskStorage({
@@ -71,7 +156,7 @@ const upload = multer({
     const allowedTypes = /jpeg|jpg|png|gif/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
-    
+
     if (extname && mimetype) {
       cb(null, true);
     } else {
@@ -92,7 +177,7 @@ app.get("/api/cameras", async (_req, res) => {
     const defaultCameras = [
       { lat: 13.7563, lng: 100.5018, name: "Camera 1" } // Bangkok area default
     ];
-    
+
     // Try to read from config file if exists
     const configPath = path.join(DATA_DIR, "cameras.json");
     try {
@@ -105,12 +190,12 @@ app.get("/api/cameras", async (_req, res) => {
       // Config file doesn't exist or is invalid, use defaults
       console.log("[api] Using default camera positions");
     }
-    
+
     // Return default cameras
     res.json({ cameras: defaultCameras });
   } catch (error) {
     console.error("[api] Error getting camera positions:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to get camera positions",
       message: error.message
     });
@@ -123,13 +208,13 @@ app.get("/api/debug/paths", async (_req, res) => {
     const detectedExists = await fs.access(DETECTED_DIR).then(() => true).catch(() => false);
     let fileCount = 0;
     let imageCount = 0;
-    
+
     if (detectedExists) {
       const files = await fs.readdir(DETECTED_DIR);
       fileCount = files.length;
       imageCount = files.filter(file => /\.(jpg|jpeg|png|gif)$/i.test(file)).length;
     }
-    
+
     res.json({
       dataDir: DATA_DIR,
       detectedDir: DETECTED_DIR,
@@ -152,22 +237,22 @@ app.get("/api/detected/images", async (_req, res) => {
       await fs.access(DETECTED_DIR);
     } catch (accessError) {
       console.error(`[api] Directory does not exist: ${DETECTED_DIR}`, accessError);
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "Detected directory not found",
         path: DETECTED_DIR,
-        message: accessError.message 
+        message: accessError.message
       });
     }
-    
+
     const files = await fs.readdir(DETECTED_DIR);
     console.log(`[api] Found ${files.length} files in directory`);
-    
+
     // Filter only image files
-    const imageFiles = files.filter(file => 
+    const imageFiles = files.filter(file =>
       /\.(jpg|jpeg|png|gif)$/i.test(file)
     );
     console.log(`[api] Filtered to ${imageFiles.length} image files`);
-    
+
     // Sort by filename in descending order (newest first: img_0258.jpg > img_0001.jpg)
     imageFiles.sort((a, b) => {
       // Extract numbers from filenames (e.g., "img_0258.jpg" -> 258)
@@ -175,11 +260,11 @@ app.get("/api/detected/images", async (_req, res) => {
       const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
       return numB - numA; // Descending order (newest first)
     });
-    
+
     res.json({ images: imageFiles, count: imageFiles.length });
   } catch (error) {
     console.error("[api] Error listing detected images:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to list images",
       message: error.message,
       path: DETECTED_DIR
@@ -196,36 +281,36 @@ app.get("/api/detected/images/latest", async (_req, res) => {
       await fs.access(DETECTED_DIR);
     } catch (accessError) {
       console.error(`[api] Directory does not exist: ${DETECTED_DIR}`, accessError);
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "Detected directory not found",
         path: DETECTED_DIR,
-        message: accessError.message 
+        message: accessError.message
       });
     }
-    
+
     const files = await fs.readdir(DETECTED_DIR);
-    
+
     // Filter only image files
-    const imageFiles = files.filter(file => 
+    const imageFiles = files.filter(file =>
       /\.(jpg|jpeg|png|gif)$/i.test(file)
     );
-    
+
     if (imageFiles.length === 0) {
       return res.json({ image: null, filename: null });
     }
-    
+
     // Sort by filename in descending order (newest first)
     imageFiles.sort((a, b) => {
       const numA = parseInt(a.match(/\d+/)?.[0] || "0", 10);
       const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
       return numB - numA; // Descending order (newest first)
     });
-    
+
     const latestImage = imageFiles[0];
     res.json({ image: latestImage, filename: latestImage });
   } catch (error) {
     console.error("[api] Error getting latest detected image:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to get latest image",
       message: error.message,
       path: DETECTED_DIR
@@ -243,21 +328,21 @@ app.get("/api/csv/files", async (_req, res) => {
       console.error(`[api] CSV directory does not exist: ${CSV_DIR}`, accessError);
       return res.json({ files: [], count: 0 });
     }
-    
+
     const files = await fs.readdir(CSV_DIR);
     const csvFiles = files.filter(file => /\.csv$/i.test(file));
-    
+
     // Sort by filename in descending order (newest first)
     csvFiles.sort((a, b) => {
       const numA = parseInt(a.match(/\d+/)?.[0] || "0", 10);
       const numB = parseInt(b.match(/\d+/)?.[0] || "0", 10);
       return numB - numA;
     });
-    
+
     res.json({ files: csvFiles, count: csvFiles.length });
   } catch (error) {
     console.error("[api] Error listing CSV files:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to list CSV files",
       message: error.message
     });
@@ -268,31 +353,31 @@ app.get("/api/csv/files", async (_req, res) => {
 app.get("/api/csv/for-image/:imageFilename", async (req, res) => {
   try {
     const imageFilename = req.params.imageFilename;
-    
+
     try {
       await fs.access(CSV_DIR);
     } catch {
       return res.json({ data: null, message: "CSV directory not found" });
     }
-    
+
     const files = await fs.readdir(CSV_DIR);
     const csvFiles = files.filter(file => /\.csv$/i.test(file));
-    
+
     // Search through all CSV files to find matching image_name
     let matchedData = null;
     let matchedFile = null;
-    
+
     for (const csvFile of csvFiles) {
       const csvPath = path.join(CSV_DIR, csvFile);
       const csvData = await readCSVFile(csvPath);
-      
+
       if (csvData && csvData.data && csvData.data.length > 0) {
         // Look for row with matching image_name
         const matchedRow = csvData.data.find(row => {
           const rowImageName = row.image_name || row.imageName || row["image_name"];
           return rowImageName === imageFilename || rowImageName === imageFilename.replace(/^.*\//, "");
         });
-        
+
         if (matchedRow) {
           matchedData = matchedRow;
           matchedFile = csvFile;
@@ -300,18 +385,18 @@ app.get("/api/csv/for-image/:imageFilename", async (req, res) => {
         }
       }
     }
-    
+
     if (!matchedData) {
       return res.json({ data: null, message: "No matching CSV data found for this image" });
     }
-    
-    res.json({ 
-      data: matchedData, 
-      filename: matchedFile 
+
+    res.json({
+      data: matchedData,
+      filename: matchedFile
     });
   } catch (error) {
     console.error("[api] Error getting CSV for image:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to get CSV data",
       message: error.message
     });
@@ -319,153 +404,166 @@ app.get("/api/csv/for-image/:imageFilename", async (req, res) => {
 });
 
 // Endpoint to upload detected images from Pi 5 (after AI detection)
-app.post("/api/detected/upload", upload.single('image'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No image file provided' });
-    }
-    
-    const imageFile = req.file;
-    const timestamp = new Date().toISOString();
-    
-    console.log(`[API] [${timestamp}] Received detected image upload from Pi 5: ${imageFile.filename}`);
-    
-    // Parse CSV data from request body
-    let csvData = null;
+app.post(
+  "/api/detected/upload",
+  uploadLimiter,
+  upload.single("image"),
+  [
+    body("latitude").optional().isFloat({ min: -90, max: 90 }).withMessage("Invalid latitude"),
+    body("longitude")
+      .optional()
+      .isFloat({ min: -180, max: 180 })
+      .withMessage("Invalid longitude"),
+    body("confidence").optional().isFloat({ min: 0, max: 1 }).withMessage("Invalid confidence"),
+  ],
+  validate,
+  async (req, res) => {
     try {
-      if (req.body.csvData) {
-        csvData = typeof req.body.csvData === 'string' 
-          ? JSON.parse(req.body.csvData) 
-          : req.body.csvData;
-      } else if (req.body.latitude || req.body.longitude) {
-        // If CSV data is provided as individual fields
-        csvData = {
-          image_name: imageFile.filename,
-          latitude: req.body.latitude || req.body.lat,
-          longitude: req.body.longitude || req.body.lng,
-          confidence: req.body.confidence || 1.0,
-          bbox_x1: req.body.bbox_x1 || null,
-          bbox_y1: req.body.bbox_y1 || null,
-          bbox_x2: req.body.bbox_x2 || null,
-          bbox_y2: req.body.bbox_y2 || null,
-          frame_number: req.body.frame_number || req.body.frameNumber || null,
-          timestamp: req.body.timestamp || timestamp,
-          camera_id: req.body.cameraId || req.body.camera_id || 'pi5',
-          camera_name: req.body.cameraName || req.body.camera_name || 'Pi 5 Camera'
-        };
+      if (!req.file) {
+        return res.status(400).json({ error: 'No image file provided' });
       }
-    } catch (parseError) {
-      console.error(`[API] [${timestamp}] Error parsing CSV data:`, parseError);
-    }
-    
-    // Save CSV data if provided
-    if (csvData) {
+
+      const imageFile = req.file;
+      const timestamp = new Date().toISOString();
+
+      console.log(`[API] [${timestamp}] Received detected image upload from Pi 5: ${imageFile.filename}`);
+
+      // Parse CSV data from request body
+      let csvData = null;
       try {
-        // Ensure CSV directory exists
-        await fs.mkdir(CSV_DIR, { recursive: true });
-        
-        // Generate CSV filename (same name as image but with .csv extension)
-        const csvFilename = imageFile.filename.replace(/\.(jpg|jpeg|png|gif)$/i, '.csv');
-        const csvPath = path.join(CSV_DIR, csvFilename);
-        
-        // Ensure image_name matches the actual filename
-        csvData.image_name = imageFile.filename;
-        
-        // Create CSV content (format: header row, then data row)
-        // Match the format used by existing CSV files (e.g., test_predictions.csv)
-        const csvHeader = Object.keys(csvData).join(',');
-        
-        // Create CSV data row - quote values that might contain commas or special characters
-        const csvRow = Object.values(csvData).map(value => {
-          if (value === null || value === undefined) {
-            return '';
-          }
-          const str = String(value);
-          // Quote if contains comma, newline, or quote
-          if (str.includes(',') || str.includes('\n') || str.includes('"') || str.includes('\r')) {
-            return `"${str.replace(/"/g, '""')}"`;
-          }
-          return str;
-        }).join(',');
-        
-        const csvContent = csvHeader + '\n' + csvRow;
-        
-        // Save CSV file
-        await fs.writeFile(csvPath, csvContent, 'utf-8');
-        
-        console.log(`[API] [${timestamp}] ✅ Saved CSV: ${csvFilename}`);
-        console.log(`[API] [${timestamp}] CSV Data:`, JSON.stringify(csvData));
-      } catch (csvError) {
-        console.error(`[API] [${timestamp}] ❌ Error saving CSV:`, csvError);
+        if (req.body.csvData) {
+          csvData = typeof req.body.csvData === 'string'
+            ? JSON.parse(req.body.csvData)
+            : req.body.csvData;
+        } else if (req.body.latitude || req.body.longitude) {
+          // If CSV data is provided as individual fields
+          csvData = {
+            image_name: imageFile.filename,
+            latitude: req.body.latitude || req.body.lat,
+            longitude: req.body.longitude || req.body.lng,
+            confidence: req.body.confidence || 1.0,
+            bbox_x1: req.body.bbox_x1 || null,
+            bbox_y1: req.body.bbox_y1 || null,
+            bbox_x2: req.body.bbox_x2 || null,
+            bbox_y2: req.body.bbox_y2 || null,
+            frame_number: req.body.frame_number || req.body.frameNumber || null,
+            timestamp: req.body.timestamp || timestamp,
+            camera_id: req.body.cameraId || req.body.camera_id || 'pi5',
+            camera_name: req.body.cameraName || req.body.camera_name || 'Pi 5 Camera'
+          };
+        }
+      } catch (parseError) {
+        console.error(`[API] [${timestamp}] Error parsing CSV data:`, parseError);
       }
+
+      // Save CSV data if provided
+      if (csvData) {
+        try {
+          // Ensure CSV directory exists
+          await fs.mkdir(CSV_DIR, { recursive: true });
+
+          // Generate CSV filename (same name as image but with .csv extension)
+          const csvFilename = imageFile.filename.replace(/\.(jpg|jpeg|png|gif)$/i, '.csv');
+          const csvPath = path.join(CSV_DIR, csvFilename);
+
+          // Ensure image_name matches the actual filename
+          csvData.image_name = imageFile.filename;
+
+          // Create CSV content (format: header row, then data row)
+          // Match the format used by existing CSV files (e.g., test_predictions.csv)
+          const csvHeader = Object.keys(csvData).join(',');
+
+          // Create CSV data row - quote values that might contain commas or special characters
+          const csvRow = Object.values(csvData).map(value => {
+            if (value === null || value === undefined) {
+              return '';
+            }
+            const str = String(value);
+            // Quote if contains comma, newline, or quote
+            if (str.includes(',') || str.includes('\n') || str.includes('"') || str.includes('\r')) {
+              return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+          }).join(',');
+
+          const csvContent = csvHeader + '\n' + csvRow;
+
+          // Save CSV file
+          await fs.writeFile(csvPath, csvContent, 'utf-8');
+
+          console.log(`[API] [${timestamp}] ✅ Saved CSV: ${csvFilename}`);
+          console.log(`[API] [${timestamp}] CSV Data:`, JSON.stringify(csvData));
+        } catch (csvError) {
+          console.error(`[API] [${timestamp}] ❌ Error saving CSV:`, csvError);
+        }
+      }
+
+      // File watcher will detect new files and emit to frontend automatically
+      console.log(`[API] [${timestamp}] ✅ Image uploaded successfully: ${imageFile.filename}`);
+      console.log(`[API] [${timestamp}] File watcher will detect and emit to frontend`);
+
+      // Emit event to connected clients
+      io.emit('new-detected-image', {
+        filename: imageFile.filename,
+        timestamp: timestamp,
+        csvData: csvData
+      });
+
+      res.json({
+        success: true,
+        message: 'Image uploaded successfully',
+        filename: imageFile.filename,
+        csvData: csvData,
+        timestamp: timestamp
+      });
+    } catch (error) {
+      console.error(`[API] [${new Date().toISOString()}] ❌ Error uploading image:`, error);
+      res.status(500).json({
+        error: 'Failed to upload image',
+        message: error.message
+      });
     }
-    
-    // File watcher will detect new files and emit to frontend automatically
-    console.log(`[API] [${timestamp}] ✅ Image uploaded successfully: ${imageFile.filename}`);
-    console.log(`[API] [${timestamp}] File watcher will detect and emit to frontend`);
-    
-    // Emit event to connected clients
-    io.emit('new-detected-image', {
-      filename: imageFile.filename,
-      timestamp: timestamp,
-      csvData: csvData
-    });
-    
-    res.json({
-      success: true,
-      message: 'Image uploaded successfully',
-      filename: imageFile.filename,
-      csvData: csvData,
-      timestamp: timestamp
-    });
-  } catch (error) {
-    console.error(`[API] [${new Date().toISOString()}] ❌ Error uploading image:`, error);
-    res.status(500).json({ 
-      error: 'Failed to upload image', 
-      message: error.message 
-    });
-  }
-});
+  });
 
 // Endpoint to serve detected images
 app.get("/api/detected/images/:filename", async (req, res) => {
   try {
     const filename = req.params.filename;
     console.log(`[api] Requesting image: ${filename}`);
-    
+
     // Security: prevent directory traversal
     if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
       return res.status(400).json({ error: "Invalid filename" });
     }
     const filePath = path.join(DETECTED_DIR, filename);
     console.log(`[api] Full path: ${filePath}`);
-    
+
     // Check if file exists
     try {
       await fs.access(filePath);
     } catch (accessError) {
       console.error(`[api] File not found: ${filePath}`, accessError);
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "Image not found",
         filename: filename,
         path: filePath
       });
     }
-    
+
     // Determine content type
     const ext = path.extname(filename).toLowerCase();
     const contentType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
-                       ext === ".png" ? "image/png" :
-                       ext === ".gif" ? "image/gif" : "image/jpeg";
+      ext === ".png" ? "image/png" :
+        ext === ".gif" ? "image/gif" : "image/jpeg";
     res.setHeader("Content-Type", contentType);
-    
+
     // Stream the file
     const imageBuffer = await fs.readFile(filePath);
     console.log(`[api] Served image: ${filename} (${imageBuffer.length} bytes)`);
     res.send(imageBuffer);
   } catch (error) {
     console.error("[api] Error serving detected image:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: "Failed to serve image",
       message: error.message
     });
@@ -581,27 +679,27 @@ function updateDroneData(data) {
     // Support both "lng" and "lon" (MATLAB might use "lon")
     let lng = parseFloat(data.lng || data.lon);
     let height = parseFloat(data.height) || 0;
-    
+
     // Validate data
     if (isNaN(lat) || isNaN(lng)) {
       console.error("[DRONE] Invalid lat/lng values:", { lat: data.lat, lng: data.lng || data.lon });
       return false;
     }
-    
+
     // Fix inverted Y axis: if height is negative, it means the coordinate system is inverted
     // Invert height to make it positive (above ground)
     if (height < 0) {
       height = Math.abs(height);
       console.log(`[DRONE] Fixed inverted height: ${data.height} -> ${height}`);
     }
-    
+
     // Fix inverted Y axis for latitude if needed (if coordinates are in local coordinate system)
     // If latitude is negative and seems to be in wrong range, might need to invert
     // For now, we'll keep lat/lng as is but ensure height is positive
-    
+
     // Check if drone exists
     const existingIndex = teamDronesData.findIndex(d => d.id === DRONE_ID);
-    
+
     if (existingIndex >= 0) {
       // Update existing drone
       const previousLocation = teamDronesData[existingIndex].location;
@@ -633,11 +731,11 @@ function updateDroneData(data) {
       });
       console.log(`[DRONE] Added new drone ${DRONE_ID} - Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}, Height: ${height.toFixed(2)}m`);
     }
-    
+
     // Emit to all connected clients via Socket.IO
     io.emit("team-drones-update", { drones: teamDronesData, timestamp });
     console.log(`[DRONE] Emitted update to ${io.engine.clientsCount} connected client(s)`);
-    
+
     return true;
   } catch (error) {
     console.error("[DRONE] Error updating drone data:", error);
@@ -650,23 +748,23 @@ app.post("/api/offensive/drones/update", async (req, res) => {
   try {
     const droneData = req.body;
     const timestamp = new Date().toISOString();
-    
+
     console.log(`[API] [${timestamp}] Received drone update from MATLAB (HTTP POST):`, JSON.stringify(droneData));
-    
+
     // Expected format: { "lat": value, "lng": value, "height": value }
     const success = updateDroneData(droneData);
-    
+
     if (success) {
-      res.json({ 
-        success: true, 
-        message: "Drone data updated successfully", 
+      res.json({
+        success: true,
+        message: "Drone data updated successfully",
         drone: teamDronesData[0] || null,
-        timestamp 
+        timestamp
       });
     } else {
-      res.status(400).json({ 
-        success: false, 
-        error: "Invalid drone data format", 
+      res.status(400).json({
+        success: false,
+        error: "Invalid drone data format",
         expected: { lat: "number", lng: "number", height: "number (optional)" },
         received: droneData
       });
@@ -678,8 +776,8 @@ app.post("/api/offensive/drones/update", async (req, res) => {
 });
 
 // MQTT Configuration (optional - for real-time updates from MATLAB)
-const MQTT_BROKER = process.env.MQTT_BROKER || "mqtt://localhost:1883";
-const MQTT_TOPIC = process.env.MQTT_TOPIC || "tesa/drones/offensive";
+const MQTT_BROKER = CONFIG.MQTT_BROKER;
+const MQTT_TOPIC = CONFIG.MQTT_TOPIC;
 let mqttClient = null;
 
 // Initialize MQTT client (if broker is available)
@@ -709,15 +807,15 @@ function initializeMQTT() {
         const timestamp = new Date().toISOString();
         const messageStr = message.toString();
         console.log(`[MQTT] [${timestamp}] Received message from topic "${topic}":`, messageStr);
-        
+
         // Parse JSON message
         const data = JSON.parse(messageStr);
         console.log(`[MQTT] [${timestamp}] Parsed JSON data:`, JSON.stringify(data));
-        
+
         // Expected format from MATLAB: { "lat": value, "lng": value, "height": value }
         // Update drone data
         const success = updateDroneData(data);
-        
+
         if (success) {
           console.log(`[MQTT] [${timestamp}] Successfully processed drone update from MATLAB`);
         } else {
@@ -774,10 +872,10 @@ async function watchDronesFile() {
         const content = await fs.readFile(filePath, "utf-8");
         const data = JSON.parse(content);
         console.log(`[WATCHER] [${timestamp}] 📄 File content:`, JSON.stringify(data));
-        
+
         // Expected format: { "lat": value, "lng": value, "height": value }
         const success = updateDroneData(data);
-        
+
         if (success) {
           console.log(`[WATCHER] [${timestamp}] ✅ Successfully updated drone from file`);
         } else {
@@ -801,10 +899,10 @@ async function readCSVFile(filePath) {
     const content = await fs.readFile(filePath, "utf-8");
     const lines = content.trim().split("\n");
     if (lines.length < 2) return null;
-    
+
     const headers = lines[0].split(",").map(h => h.trim());
     const data = [];
-    
+
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split(",").map(v => v.trim());
       const obj = {};
@@ -813,7 +911,7 @@ async function readCSVFile(filePath) {
       });
       data.push(obj);
     }
-    
+
     return { headers, data };
   } catch (error) {
     console.error(`Error reading CSV file ${filePath}:`, error);
@@ -827,8 +925,8 @@ async function readImageFile(filePath) {
     const imageBuffer = await fs.readFile(filePath);
     const base64Image = imageBuffer.toString("base64");
     const ext = path.extname(filePath).toLowerCase();
-    const mimeType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : 
-                     ext === ".png" ? "image/png" : "image/jpeg";
+    const mimeType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
+      ext === ".png" ? "image/png" : "image/jpeg";
     return `data:${mimeType};base64,${base64Image}`;
   } catch (error) {
     console.error(`Error reading image file ${filePath}:`, error);
@@ -841,7 +939,7 @@ async function getLatestFiles() {
   try {
     const csvFiles = await fs.readdir(CSV_DIR);
     const imageFiles = await fs.readdir(IMAGE_DIR);
-    
+
     // Sort by modification time and get the latest
     const csvStats = await Promise.all(
       csvFiles.map(async (file) => {
@@ -850,7 +948,7 @@ async function getLatestFiles() {
         return { file, path: filePath, mtime: stats.mtime };
       })
     );
-    
+
     const imageStats = await Promise.all(
       imageFiles.map(async (file) => {
         const filePath = path.join(IMAGE_DIR, file);
@@ -858,10 +956,10 @@ async function getLatestFiles() {
         return { file, path: filePath, mtime: stats.mtime };
       })
     );
-    
+
     const latestCSV = csvStats.sort((a, b) => b.mtime - a.mtime)[0];
     const latestImage = imageStats.sort((a, b) => b.mtime - a.mtime)[0];
-    
+
     return { latestCSV, latestImage };
   } catch (error) {
     console.error("Error getting latest files:", error);
@@ -874,7 +972,7 @@ async function processAndEmitData(csvPath, imagePath) {
   try {
     const csvData = csvPath ? await readCSVFile(csvPath) : null;
     const imageData = imagePath ? await readImageFile(imagePath) : null;
-    
+
     if (csvData || imageData) {
       const payload = {
         timestamp: new Date().toISOString(),
@@ -883,7 +981,7 @@ async function processAndEmitData(csvPath, imagePath) {
         csvPath: csvPath ? path.basename(csvPath) : null,
         imagePath: imagePath ? path.basename(imagePath) : null
       };
-      
+
       io.emit("drone-data", payload);
       console.log(`[socket] Emitted drone data: ${payload.csvPath || "no CSV"}, ${payload.imagePath || "no image"}`);
     }
@@ -991,7 +1089,7 @@ async function initialize() {
     // Still start the server, watchers will be set up when directories are created
     setupFileWatchers();
   }
-  
+
   // Log detected directory info
   try {
     await fs.access(DETECTED_DIR);
@@ -1003,10 +1101,10 @@ async function initialize() {
     console.warn(`[warning] Detected directory not found: ${DETECTED_DIR}`);
     console.warn(`[warning] Please ensure dataForWeb/detected directory exists`);
   }
-  
+
   // Initialize MQTT client (optional)
   initializeMQTT();
-  
+
   // Watch for team drones JSON file (alternative to MQTT)
   watchDronesFile();
 }
